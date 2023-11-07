@@ -413,6 +413,7 @@ class MIMIC3Dataset(BaseEHRDataset):
                     events.append(event)
             return events
 
+        # prova prova
         # Apply the function to each group
         group_df = group_df.apply(lambda x: note_event_unit(x.name, x))
 
