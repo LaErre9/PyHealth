@@ -368,6 +368,59 @@ class MIMIC3Dataset(BaseEHRDataset):
         return patients
 
 
+    def parse_noteevents_icd(self, patients: Dict[str, Patient]) -> Dict[str, Patient]:
+        """Helper function which parses NOTEEVENTS_ICD CSV file.
+        
+        Args:
+            patients: a dict of `Patient` objects indexed by patient_id.
+            
+        Returns:
+            The updated patients dict.
+        """
+        table = "NOTEEVENTS_ICD"
+        self.code_vocs["symptoms"] = "ICD9CM"  # Assuming conditions are represented by ICD9CM codes
+
+        # Read NOTEEVENTS_ICD table
+        df = pd.read_csv(
+            os.path.join(self.root, f"{table}.csv"),
+            dtype={"SUBJECT_ID": str, "HADM_ID": str, "ICD9_CODE": str}
+        )
+
+        # Drop records of the other patients
+        df = df[df["SUBJECT_ID"].isin(patients.keys())]
+
+        # Drop rows with missing values
+        df = df.dropna(subset=["SUBJECT_ID", "HADM_ID", "ICD9_CODE"])
+
+        # Sort by sequence number (i.e., priority)
+        df = df.sort_values(["SUBJECT_ID", "HADM_ID", "SEQ_NUM"], ascending=True)
+
+        # Group by patient and visit
+        group_df = df.groupby("SUBJECT_ID")
+
+        # Unit of note event (per patient)
+        def note_event_unit(p_id, p_info):
+            events = []
+            for v_id, v_info in p_info.groupby("HADM_ID"):
+                for _, row in v_info.iterrows():
+                    event = Event(
+                        code=row["ICD9_CODE"],
+                        table=table,
+                        vocabulary="ICD9CM",
+                        visit_id=v_id,
+                        patient_id=p_id
+                    )
+                    events.append(event)
+            return events
+
+        # Apply the function to each group
+        group_df = group_df.apply(lambda x: note_event_unit(x.name, x))
+
+        # Summarize the results
+        patients = self._add_events_to_patient_dict(patients, group_df)
+        return patients
+
+
 if __name__ == "__main__":
     dataset = MIMIC3Dataset(
         root="https://storage.googleapis.com/pyhealth/mimiciii-demo/1.4/",
@@ -375,6 +428,7 @@ if __name__ == "__main__":
             "DIAGNOSES_ICD",
             "PROCEDURES_ICD",
             "PRESCRIPTIONS",
+            "NOTEEVENTS_ICD",
             "LABEVENTS",
         ],
         code_mapping={"NDC": "ATC"},
