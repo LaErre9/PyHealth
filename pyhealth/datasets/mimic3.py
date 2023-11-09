@@ -85,7 +85,7 @@ class MIMIC3Dataset(BaseEHRDataset):
         """
         # read patients table
         patients_df = pd.read_csv(
-            os.path.join(self.root, "PATIENTS.csv"),
+            os.path.join(self.root, "PATIENTS_SEL.csv"),
             dtype={"SUBJECT_ID": str},
             nrows=1000 if self.dev else None,
         )
