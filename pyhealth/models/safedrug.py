@@ -234,7 +234,7 @@ class SafeDrugLayer(nn.Module):
 
         loss = beta * bce_loss + (1 - beta) * add_loss
         # loss = bce_loss
-        return loss, add_loss
+        return loss, batch_ddi_loss
 
     def forward(
         self,
@@ -934,7 +934,7 @@ class SafeDrug_Mod(BaseModel):
         # (patient, visit, embedding_dim)
         symptoms = torch.sum(symptoms, dim=2)
         # (batch, visit, hidden_size)
-        symptoms, _ = self.proc_rnn(symptoms)
+        symptoms, _ = self.symp_rnn(symptoms)
 
         # (batch, visit, 2 * hidden_size)
         patient_emb = torch.cat([conditions, procedures, symptoms], dim=-1)
