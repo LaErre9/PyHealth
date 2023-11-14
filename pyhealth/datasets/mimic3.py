@@ -280,6 +280,9 @@ class MIMIC3Dataset(BaseEHRDataset):
         df = df[df["SUBJECT_ID"].isin(patients.keys())]
         # drop rows with missing values
         df = df.dropna(subset=["SUBJECT_ID", "HADM_ID", "NDC"])
+
+        df = df.drop_duplicates(subset=["SUBJECT_ID", "HADM_ID", "NDC"])
+
         # sort by start date and end date
         df = df.sort_values(
             ["SUBJECT_ID", "HADM_ID", "STARTDATE", "ENDDATE"], ascending=True
