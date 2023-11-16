@@ -10,6 +10,7 @@ from torch.nn.functional import multilabel_margin_loss
 
 from torch_geometric.data import HeteroData
 import torch_geometric.transforms as T
+from torch_geometric.loader import LinkNeighborLoader
 
 from pyhealth.models import BaseModel
 from pyhealth.models.utils import get_last_visit
@@ -273,9 +274,56 @@ class GNN(BaseModel):
 
             return graph
 
+        ### ========== RANDOM LINK SPLIT ==========================
+        transform = T.RandomLinkSplit(
+            num_val=0.0,
+            num_test=0.0,
+            disjoint_train_ratio=0.3,
+            neg_sampling_ratio=2.0,
+            add_negative_train_samples=False,
+            edge_types=[('patient', 'presents', 'symptom'),('patient', 'has', 'disease'),('patient', 'has_treat', 'procedure'),('patient', 'has_received', 'drug')],
+            rev_edge_types=[('symptom', 'rev_presents', 'patient'),('disease', 'rev_has', 'patient'),('procedure', 'rev_has_treat', 'patient'),('drug', 'rev_has_received', 'patient')],
+        ) 
+
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = get_dataframe(self)
 
         self.edge_index_patient_to_symptom, self.edge_index_patient_to_disease, \
             self.edge_index_patient_to_procedure, self.edge_index_patient_to_drug = get_edge_index(self)
         
         self.graph = graph_definition(self)
+
+        self.train_data, self.val_data, self.test_data = transform(self.graph)
+        ### Per prova stampo
+        print("Training data:")
+        print("==============")
+        print(self.train_data)
+        print()
+        print("Validation data:")
+        print("================")
+        print(self.val_data)
+        print()
+        print("Test data:")
+        print("================")
+        print(self.test_data)
+
+        ### ========== LINK NEIGHBOR LOADER ==========================
+        # Define seed edges:
+        self.edge_label_index = self.train_data["patient", "has_received", "drug"].edge_label_index
+        self.edge_label = self.train_data["patient", "has_received", "drug"].edge_label
+
+        train_loader = LinkNeighborLoader(
+            data=self.train_data,
+            num_neighbors=[20, 10],
+            neg_sampling_ratio=2.0,
+            edge_label_index=(("patient", "has_received", "drug"), self.edge_label_index),
+            edge_label=self.edge_label,
+            batch_size=128,
+            shuffle=True,
+        )
+
+        # Inspect a sample:
+        self.sampled_data = next(iter(train_loader))
+
+        print("Sampled mini-batch:")
+        print("===================")
+        print(self.sampled_data)
