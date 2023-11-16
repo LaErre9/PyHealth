@@ -24,3 +24,4 @@ from .stagenet import StageNet, StageNetLayer
 from .tcn import TCN, TCNLayer
 from .molerec import MoleRec, MoleRecLayer
 from .medlink import MedLink
+from .gnn import GNN, GNNLayer

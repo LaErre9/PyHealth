@@ -110,6 +110,7 @@ class Trainer:
 
     def train(
         self,
+        model_name: str,
         train_dataloader: DataLoader,
         val_dataloader: Optional[DataLoader] = None,
         test_dataloader: Optional[DataLoader] = None,
@@ -198,7 +199,8 @@ class Trainer:
                 # forward
                 output = self.model(**data)
                 loss = output["loss"]
-                ddi_loss = output["ddi_loss"]
+                if model_name == "safedrug":
+                    ddi_loss = output["ddi_loss"]
                 # backward
                 loss.backward()
                 if max_grad_norm is not None:
@@ -213,7 +215,8 @@ class Trainer:
             # log and save
             logger.info(f"--- Train epoch-{epoch}, step-{global_step} ---")
             logger.info(f"loss: {sum(training_loss) / len(training_loss):.4f}")
-            logger.info(f"ddi_loss: {ddi_loss:.4f}")
+            if model_name == "safedrug":
+                logger.info(f"ddi_loss: {ddi_loss:.4f}")
             if self.exp_path is not None:
                 self.save_ckpt(os.path.join(self.exp_path, "last.ckpt"))
 
