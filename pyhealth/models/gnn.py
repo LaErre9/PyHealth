@@ -449,10 +449,12 @@ class GNN(BaseModel):
 
         self.train_loader = self.get_batches()
         
-        loss, y_prob = self.layer(
-            self.graph
+        loss, pred = self.layer(
+            self.train_loader
         )
 
+        y_prob = self.prepare_y_prob(pred)
+        
         return {
             "loss": loss,
             "y_prob": y_prob,
