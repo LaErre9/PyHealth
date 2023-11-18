@@ -136,7 +136,7 @@ class GNN(BaseModel):
         self,
         dataset: SampleEHRDataset,
         embedding_dim: int = 128,
-        hidden_channels: int = 32,
+        hidden_channels: int = 256,
         **kwargs,
     ):
         super(GNN, self).__init__(
@@ -218,8 +218,8 @@ class GNN(BaseModel):
         """
 
         ### =============== MAPPING SYMPTOMS ===========================
-        print('Num. Patients: ' + str(len(self.symp_df['SUBJECT_ID'].unique())))
-        print('Num. Symptoms: ' + str(len(self.symp_df['ICD9_CODE'].unique())))
+        #print('Num. Patients: ' + str(len(self.symp_df['SUBJECT_ID'].unique())))
+        #print('Num. Symptoms: ' + str(len(self.symp_df['ICD9_CODE'].unique())))
 
         # Creazione di un vocabolario unico dai codici ICD9_CODE
         icd9_symp_vocab = self.symp_df['ICD9_CODE'].unique()
@@ -241,15 +241,15 @@ class GNN(BaseModel):
 
         edge_index_patient_to_symptom = torch.stack([presents_patient_id, presents_symptom_id], dim=0)
 
-        print('Dimension of edge index: ' + str(edge_index_patient_to_symptom.shape))
-        print("Final edge indices pointing from patients to symptoms:")
-        print("=================================================")
-        print(edge_index_patient_to_symptom)
-        print("=================================================")
+        #print('Dimension of edge index: ' + str(edge_index_patient_to_symptom.shape))
+        #print("Final edge indices pointing from patients to symptoms:")
+        #print("=================================================")
+        #print(edge_index_patient_to_symptom)
+        #print("=================================================")
 
         ### =============== MAPPING DIAGNOSES ===========================
-        print('Num. Patients: ' + str(len(self.diag_df['SUBJECT_ID'].unique())))
-        print('Num. Diseases: ' + str(len(self.diag_df['ICD9_CODE'].unique())))
+        #print('Num. Patients: ' + str(len(self.diag_df['SUBJECT_ID'].unique())))
+        #print('Num. Diseases: ' + str(len(self.diag_df['ICD9_CODE'].unique())))
 
         # Creazione di un vocabolario unico dai codici ICD9_CODE
         icd9_diag_vocab = self.diag_df['ICD9_CODE'].unique()
@@ -269,15 +269,15 @@ class GNN(BaseModel):
 
         edge_index_patient_to_disease = torch.stack([hasdisease_patient_id, hasdisease_disease_id], dim=0)
 
-        print('Dimension of edge index: ' + str(edge_index_patient_to_disease.shape))
-        print("Final edge indices pointing from patients to diseases:")
-        print("=================================================")
-        print(edge_index_patient_to_disease)
-        print("=================================================")
+        #print('Dimension of edge index: ' + str(edge_index_patient_to_disease.shape))
+        #print("Final edge indices pointing from patients to diseases:")
+        #print("=================================================")
+        #print(edge_index_patient_to_disease)
+        #print("=================================================")
 
         ### =============== MAPPING PROCEDURES ===========================
-        print('Num. Patients: ' + str(len(self.proc_df['SUBJECT_ID'].unique())))
-        print('Num. Procedures: ' + str(len(self.proc_df['ICD9_CODE'].unique())))
+        #print('Num. Patients: ' + str(len(self.proc_df['SUBJECT_ID'].unique())))
+        #print('Num. Procedures: ' + str(len(self.proc_df['ICD9_CODE'].unique())))
 
         # Creazione di un vocabolario unico dai codici ICD9_CODE
         icd9_proc_vocab = self.proc_df['ICD9_CODE'].unique()
@@ -297,15 +297,15 @@ class GNN(BaseModel):
 
         edge_index_patient_to_procedure = torch.stack([hastreat_patient_id, hastreat_procedure_id], dim=0)
 
-        print('Dimension of edge index: ' + str(edge_index_patient_to_procedure.shape))
-        print("Final edge indices pointing from patients to procedures:")
-        print("=================================================")
-        print(edge_index_patient_to_procedure)
-        print("=================================================")
+        #print('Dimension of edge index: ' + str(edge_index_patient_to_procedure.shape))
+        #print("Final edge indices pointing from patients to procedures:")
+        #print("=================================================")
+        #print(edge_index_patient_to_procedure)
+        #print("=================================================")
 
         ### =============== MAPPING DRUGS ===========================
-        print('Num. Patients: ' + str(len(self.drug_df['SUBJECT_ID'].unique())))
-        print('Num. Drugs: ' + str(len(self.drug_df['ATC_CODE'].unique())))
+        #print('Num. Patients: ' + str(len(self.drug_df['SUBJECT_ID'].unique())))
+        #print('Num. Drugs: ' + str(len(self.drug_df['ATC_CODE'].unique())))
 
         # Creazione di un vocabolario unico dai codici ATC
         atc_pre_vocab = self.drug_df['ATC_CODE'].unique()
@@ -326,10 +326,10 @@ class GNN(BaseModel):
 
         edge_index_patient_to_drug = torch.stack([hasreceived_patient_id, hasreceived_drug_id], dim=0)
 
-        print('Dimension of edge index: ' + str(edge_index_patient_to_drug.shape))
-        print("Final edge indices pointing from patients to drugs:")
-        print("=================================================")
-        print(edge_index_patient_to_drug)
+        #print('Dimension of edge index: ' + str(edge_index_patient_to_drug.shape))
+        #print("Final edge indices pointing from patients to drugs:")
+        #print("=================================================")
+        #print(edge_index_patient_to_drug)
 
         return edge_index_patient_to_symptom, edge_index_patient_to_disease, edge_index_patient_to_procedure, edge_index_patient_to_drug
     
@@ -355,9 +355,9 @@ class GNN(BaseModel):
         # We can leverage the `T.ToUndirected()` transform for this from PyG:
         graph = T.ToUndirected()(graph)
 
-        print("=================================================")
-        print("Final graph:")
-        print(graph)
+        #print("=================================================")
+        #print("Final graph:")
+        #print(graph)
 
         return graph
 
@@ -366,7 +366,7 @@ class GNN(BaseModel):
         transform = T.RandomLinkSplit(
             num_val=0.0,
             num_test=0.0,
-            disjoint_train_ratio=0.0,
+            disjoint_train_ratio=0.0, # si deve giocare anche qui per avere risultati interessanti con 0.0 sono stati i migliori
             neg_sampling_ratio=2.0,
             add_negative_train_samples=False,
             edge_types=[('patient', 'presents', 'symptom'),('patient', 'has', 'disease'),('patient', 'has_treat', 'procedure'),('patient', 'has_received', 'drug')],
@@ -376,33 +376,33 @@ class GNN(BaseModel):
         train_data, val_data, test_data = transform(self.graph)
 
         ### Per prova stampo
-        print("Training data:")
-        print("==============")
-        print(train_data)
+        # #print("Training data:")
+        # #print("==============")
+        # #print(train_data)
 
         # ### ========== LINK NEIGHBOR LOADER ==========================
         # # Define seed edges:
-        # edge_label_index = train_data["patient", "has_received", "drug"].edge_label_index
-        # edge_label = train_data["patient", "has_received", "drug"].edge_label
+        edge_label_index = train_data["patient", "has_received", "drug"].edge_label_index
+        edge_label = train_data["patient", "has_received", "drug"].edge_label
 
-        # train_loader = LinkNeighborLoader(
-        #     data=train_data,
-        #     num_neighbors=[20, 10],
-        #     neg_sampling_ratio=2.0,
-        #     edge_label_index=(("patient", "has_received", "drug"), edge_label_index),
-        #     edge_label=edge_label,
-        #     batch_size=128,
-        #     shuffle=True,
-        # )
+        train_loader = LinkNeighborLoader(
+            data=train_data,
+            num_neighbors=[20, 10],
+            neg_sampling_ratio=2.0,
+            edge_label_index=(("patient", "has_received", "drug"), edge_label_index),
+            edge_label=edge_label,
+            batch_size=128,
+            shuffle=True,
+        )
 
         # # Inspect a sample:
         # sampled_data = next(iter(train_loader))
 
-        # print("Sampled mini-batch:")
-        # print("===================")
-        # print(sampled_data)
+        # #print("Sampled mini-batch:")
+        # #print("===================")
+        # #print(sampled_data)
 
-        return train_data
+        return next(iter(train_loader))
 
     def forward(
         self,
@@ -449,10 +449,8 @@ class GNN(BaseModel):
 
         self.train_loader = self.get_batches()
         
-        loss, pred = self.layer(
-            self.train_loader
-        )
-
+        loss, pred = self.layer(self.train_loader)
+        
         y_prob = self.prepare_y_prob(pred)
         
         return {
