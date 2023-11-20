@@ -17,6 +17,8 @@ from pyhealth.utils import create_directory
 
 logger = logging.getLogger(__name__)
 
+import matplotlib.pyplot as plt ## IMPORTANTE
+
 
 def is_best(best_score: float, score: float, monitor_criterion: str) -> bool:
     if monitor_criterion == "max":
@@ -179,6 +181,9 @@ class Trainer:
             steps_per_epoch = len(train_dataloader)
         global_step = 0
 
+        train_losses = []
+        val_losses = []
+
         # epoch training loop
         for epoch in range(epochs):
             training_loss = []
@@ -213,8 +218,10 @@ class Trainer:
                 training_loss.append(loss.item())
                 global_step += 1
             # log and save
+            train_loss_avg = sum(training_loss) / len(training_loss)
+            train_losses.append(train_loss_avg)
             logger.info(f"--- Train epoch-{epoch}, step-{global_step} ---")
-            logger.info(f"loss: {sum(training_loss) / len(training_loss):.4f}")
+            logger.info(f"loss: {train_loss_avg:.4f}")
             if model_name == "safedrug":
                 logger.info(f"ddi_loss: {ddi_loss:.4f}")
             if self.exp_path is not None:
@@ -226,6 +233,7 @@ class Trainer:
                 logger.info(f"--- Eval epoch-{epoch}, step-{global_step} ---")
                 for key in scores.keys():
                     logger.info("{}: {:.4f}".format(key, scores[key]))
+                val_losses.append(scores["loss"])
                 # save best model
                 if monitor is not None:
                     score = scores[monitor]
@@ -238,11 +246,23 @@ class Trainer:
                         if self.exp_path is not None:
                             self.save_ckpt(os.path.join(self.exp_path, "best.ckpt"))
 
+
+
         # load best model
         if load_best_model_at_last and self.exp_path is not None and os.path.isfile(
             os.path.join(self.exp_path, "best.ckpt")):
             logger.info("Loaded best model")
             self.load_ckpt(os.path.join(self.exp_path, "best.ckpt"))
+
+        # Plotting
+        epochs_range = range(1, epochs + 1)
+        plt.plot(epochs_range, train_losses, label='Training Loss')
+        plt.plot(epochs_range, val_losses, label='Validation Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Training and Validation Loss')
+        plt.legend()
+        plt.show()
 
         # test
         if test_dataloader is not None:
