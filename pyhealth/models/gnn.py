@@ -19,40 +19,46 @@ from pyhealth.models.utils import get_last_visit
 from pyhealth.models.utils import batch_to_multihot
 from pyhealth.datasets import SampleEHRDataset
 
-import torch.nn.functional as F
 
+
+import torch.nn as nn
 
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
-    def __init__(self, hidden_channels, dropout=0.5):
+    def __init__(self, hidden_channels, dropout = 0.5):
         super().__init__()
 
         self.conv1 = SAGEConv(hidden_channels, hidden_channels)
+        self.bn1 = nn.BatchNorm1d(hidden_channels)
+        self.dropout1 = nn.Dropout(dropout)
         self.conv2 = SAGEConv(hidden_channels, hidden_channels)
-        self.dropout = torch.nn.Dropout(dropout)    # Add dropout layer
+        self.bn2 = nn.BatchNorm1d(hidden_channels)
+        self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = F.tanh(self.conv1(x, edge_index))
-        x = self.dropout(x)                         # Add dropout layer
-        x = self.conv2(x, edge_index)
-        x = self.dropout(x)                         # Add dropout layer
+        x = F.relu(self.conv1(x, edge_index))
+        x = self.bn1(x)
+        x = self.dropout1(x)
+        x = F.relu(self.conv2(x, edge_index))
+        x = self.bn2(x)
+        x = self.dropout2(x)
         return x
+
 
 # Our final classifier applies the dot-product between source and destination
 # node embeddings to derive edge-level predictions:
-
-
 class Classifier(torch.nn.Module):
     def forward(self, x_patient: torch.Tensor, x_drug: torch.Tensor, edge_label_index: torch.Tensor) -> torch.Tensor:
         # Convert node embeddings to edge-level representations:
         edge_feat_patient = x_patient[edge_label_index[0]]
         edge_feat_drug = x_drug[edge_label_index[1]]
 
-        # Calculate cosine similarity between edge features:
-        # cosine_sim = F.cosine_similarity(edge_feat_patient, edge_feat_drug, dim=-1) # PROVA COSINE SIMILARITY
         return (edge_feat_patient * edge_feat_drug).sum(dim=-1)
 
-        return cosine_sim
+        # Calculate cosine similarity between edge features:
+        # cosine_sim = F.cosine_similarity(edge_feat_patient, edge_feat_drug, dim=-1) # PROVA COSINE SIMILARITY
+        
+        #return cosine_sim
 
 class GNNLayer(torch.nn.Module):
     """GNN model.
@@ -144,7 +150,7 @@ class GNN(BaseModel):
         self,
         dataset: SampleEHRDataset,
         embedding_dim: int = 128, # forse non serve
-        hidden_channels: int = 128,
+        hidden_channels: int = 64,
         **kwargs,
     ):
         super(GNN, self).__init__(
