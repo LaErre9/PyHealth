@@ -172,6 +172,8 @@ class GNN(BaseModel):
         self.hidden_channels = hidden_channels
         self.label_tokenizer = self.get_label_tokenizer()
 
+        # print('vocab_size: ' + str(self.label_tokenizer.vocabulary('A03A')))
+
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.get_dataframe()
 
         self.atc_pre_dict = self.get_dict_drugs()
@@ -241,7 +243,7 @@ class GNN(BaseModel):
         atc_pre_vocab = self.drug_df['ATC_CODE'].unique()
 
         # Creazione di un dizionario che mappa il codice ATC al suo indice nel vocabolario
-        atc_pre_dict = {code: i for i, code in enumerate(atc_pre_vocab)}
+        atc_pre_dict = {code: self.label_tokenizer.vocabulary(code) for code in atc_pre_vocab}
 
         return atc_pre_dict
 
@@ -422,7 +424,7 @@ class GNN(BaseModel):
             num_val=0.0,
             num_test=0.0,
             disjoint_train_ratio=0.0,
-            neg_sampling_ratio=4.0,
+            neg_sampling_ratio=1.0,
             add_negative_train_samples=True,
             edge_types=[('patient', 'has', 'visit'),('visit', 'presents', 'symptom'),('visit', 'has', 'disease'),('visit', 'has_treat', 'procedure'),('visit', 'has_received', 'drug')],
             rev_edge_types=[('visit', 'rev_has', 'patient'),('symptom', 'rev_presents', 'visit'),('disease', 'rev_has', 'visit'),('procedure', 'rev_has_treat', 'visit'),('drug', 'rev_has_received', 'visit')],
@@ -511,21 +513,24 @@ class GNN(BaseModel):
             data['Prob'].append(prob_full[i])
 
         df = pd.DataFrame(data)
-        df.sort_values(by=['Visit_ID', 'Drug_ID'], ascending=[True, True], inplace=True)
+        df.sort_values(by=['Drug_ID'], ascending=[True], inplace=True)
         
         # Creare una lista di visite uniche e di drug uniche
         unique_visits = df['Visit_ID'].unique()
         unique_drugs = df['Drug_ID'].unique()
 
         # Creare una matrice di zeri con dimensioni (num. visite, num. drug distinte)
-        y_prob_mat = torch.zeros(len(unique_visits), len(unique_drugs))
+        y_prob_mat = torch.zeros(len(unique_visits), self.label_tokenizer.get_vocabulary_size())
 
         # Riempire la matrice con i valori di probabilità
         for i, visit in enumerate(unique_visits):
+            print('visit: ' + str(visit))
             visit_data = df[df['Visit_ID'] == visit]
             for _, row in visit_data.iterrows():
                 drug_index = torch.tensor([np.where(unique_drugs == row['Drug_ID'])[0][0]], dtype=torch.long)
+                print('drug_index: ' + str(drug_index))
                 y_prob_mat[i, drug_index] = torch.tensor([row['Prob']], dtype=torch.float)
+                print('prob: ' + str(row['Prob']))
 
         return y_prob_mat
 
@@ -547,8 +552,30 @@ class GNN(BaseModel):
         self.symptoms = symptoms
         self.drugs = drugs
 
+        # print('visit_id: ' + str(visit_id))
+        # print('drugs: ' + str(drugs))
+        # print('----------------------------------')
+
+        # print('ATC_PRE_DICT: ' + str(self.atc_pre_dict))
+        # print()
+
+        labels_index = self.label_tokenizer.batch_encode_2d(
+                self.drugs, padding=False, truncation=False
+            )
+        # print('labels_index: ' + str(labels_index))
+        # print()
+
+        tokens = self.label_tokenizer.batch_decode_2d(
+                labels_index, padding=False
+            )
+        # print('tokens: ' + str(tokens))
+        # print()
+
         # obtain y_true, loss, y_prob
         y_true = self.prepare_labels(self.drugs, self.label_tokenizer)
+
+        # print('y_true: ' + str(y_true))
+        # print()
 
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.convert_batches()
 
@@ -565,6 +592,9 @@ class GNN(BaseModel):
         self.y_prob = self.prepare_y_prob(pred)
 
         y_prob_mat = self.create_y_prob_mat()
+
+        # print('y_prob_mat: ' + str(y_prob_mat))
+        # print()
 
         return {
             "loss": loss,
