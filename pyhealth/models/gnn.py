@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Tuple, Optional, Union
 from torch.nn.functional import binary_cross_entropy_with_logits
 from torch.nn.functional import multilabel_margin_loss
 
+from torch_geometric.utils import negative_sampling
 from torch_geometric.data import HeteroData
 import torch_geometric.transforms as T
 from torch_geometric.loader import LinkNeighborLoader
@@ -22,13 +23,6 @@ from pyhealth.datasets import SampleEHRDataset
 import torch.nn.functional as F
 
 
-# Funzione per calcolare i pesi delle classi
-def compute_class_weights(y_true):
-    class_counts = torch.bincount(y_true.long())
-    total_samples = y_true.size(0)
-    class_weights = total_samples / (len(class_counts) * class_counts.float())
-    return class_weights
-
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
     def __init__(self, hidden_channels, dropout=0.5):
@@ -39,8 +33,9 @@ class GNN_Conv(torch.nn.Module):
         # self.dropout = torch.nn.Dropout(dropout)    # Add dropout layer
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = F.sigmoid(self.conv1(x, edge_index))
+        x = F.relu(self.conv1(x, edge_index))
         x = self.conv2(x, edge_index)
+        # x = self.dropout(x)    # Add dropout layer
         return x
 
 # Our final classifier applies the dot-product between source and destination
@@ -74,6 +69,7 @@ class GNNLayer(torch.nn.Module):
     def __init__(
         self,
         data: HeteroData,
+        mask: torch.Tensor,
         hidden_channels: int,
         embedding_dim: int,
         **kwargs,
@@ -97,20 +93,17 @@ class GNNLayer(torch.nn.Module):
 
         self.classifier = Classifier()
 
-    def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
-        # Calcola i pesi delle classi
-        class_weights = compute_class_weights(y_true)
 
-        # Crea un tensore di pesi per ogni esempio nel batch
-        sample_weights = class_weights[y_true.long()]
+        # print('y_true: ' + str(y_true[mask].shape))
+        # print('pred: ' + str(pred[mask].shape))
 
-        # Calcola la perdita ponderata
-        loss = F.binary_cross_entropy_with_logits(pred, y_true, weight=sample_weights)
+        loss = F.binary_cross_entropy_with_logits(pred[mask], y_true[mask])
 
         return loss
     
-    def forward(self, data: HeteroData) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, data: HeteroData, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x_dict = {
           "patient": self.pat_emb(data["patient"].node_id),
           "visit": self.vis_emb(data["visit"].node_id),
@@ -129,7 +122,7 @@ class GNNLayer(torch.nn.Module):
             data["visit", "has_received", "drug"].edge_label_index,
         )
 
-        loss = self.calculate_loss(pred, data["visit", "has_received", "drug"].edge_label)
+        loss = self.calculate_loss(pred, data["visit", "has_received", "drug"].edge_label, mask)
 
         return loss, pred
 
@@ -157,8 +150,8 @@ class GNN(BaseModel):
     def __init__(
         self,
         dataset: SampleEHRDataset,
-        embedding_dim: int = 64,
-        hidden_channels: int = 64,
+        embedding_dim: int = 32,
+        hidden_channels: int = 32,
         **kwargs,
     ):
         super(GNN, self).__init__(
@@ -186,7 +179,9 @@ class GNN(BaseModel):
 
         self.train_loader = self.get_batches()
 
-        self.layer = GNNLayer(self.train_loader, self.hidden_channels, self.embedding_dim)
+        self.mask = self.generate_mask()
+
+        self.layer = GNNLayer(self.train_loader, self.mask, self.hidden_channels, self.embedding_dim)
 
     def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Gets the dataframe of conditions, procedures, symptoms and drugs of patients.
@@ -419,47 +414,50 @@ class GNN(BaseModel):
         return graph
 
     def get_batches(self) -> HeteroData:
-        ### ========== RANDOM LINK SPLIT ==========================
-        transform = T.RandomLinkSplit(
-            num_val=0.0,
-            num_test=0.0,
-            disjoint_train_ratio=0.0,
-            neg_sampling_ratio=1.0,
-            add_negative_train_samples=True,
-            edge_types=[('patient', 'has', 'visit'),('visit', 'presents', 'symptom'),('visit', 'has', 'disease'),('visit', 'has_treat', 'procedure'),('visit', 'has_received', 'drug')],
-            rev_edge_types=[('visit', 'rev_has', 'patient'),('symptom', 'rev_presents', 'visit'),('disease', 'rev_has', 'visit'),('procedure', 'rev_has_treat', 'visit'),('drug', 'rev_has_received', 'visit')],
-        )
+        neg_edges = negative_sampling(self.graph['visit', 'has_received', 'drug'].edge_index, num_nodes=(self.graph['visit'].num_nodes,self.graph['drug'].num_nodes))
+        
+        self.graph['visit', 'has_received', 'drug'].edge_label_index = self.graph['visit', 'has_received', 'drug'].edge_index
+        self.graph['visit', 'has_received', 'drug'].edge_label = torch.ones(self.graph['visit', 'has_received', 'drug'].edge_label_index.shape[1], dtype=torch.float)
+        self.graph['visit', 'has_received', 'drug'].edge_label_index = torch.cat((self.graph['visit', 'has_received', 'drug'].edge_label_index, neg_edges), dim=1)
+        self.graph['visit', 'has_received', 'drug'].edge_label = torch.cat((self.graph['visit', 'has_received', 'drug'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
+        
+        # print(self.graph['visit', 'has_received', 'drug'].edge_label_index.shape)
+        # print(self.graph['visit', 'has_received', 'drug'].edge_label)
 
-        train_data, val_data, test_data = transform(self.graph)
+        return self.graph
 
-        # Train data:
-        # print("Training data:")
-        # print("==============")
-        # print(train_data)
+    def generate_mask(self) -> torch.Tensor:
+        mask = torch.ones_like(self.graph['visit', 'has_received', 'drug'].edge_label, dtype=torch.bool)
+        # print(mask)
 
-        # ========== LINK NEIGHBOR LOADER ==========================
-        # Define seed edges:
-        # edge_label_index = train_data["patient", "has_received", "drug"].edge_label_index
-        # edge_label = train_data["patient", "has_received", "drug"].edge_label
+        # Ottieni tutti i possibili archi nel grafo
+        all_possible_edges = torch.cartesian_prod(torch.arange(self.graph['visit'].num_nodes), torch.arange(self.graph['drug'].num_nodes))
 
-        # train_loader = LinkNeighborLoader(
-        #     data=train_data,
-        #     num_neighbors=[20, 10],
-        #     neg_sampling_ratio=0.0,
-        #     edge_label_index=(("patient", "has_received", "drug"), edge_label_index),
-        #     edge_label=edge_label,
-        #     batch_size=128,              
-        #     shuffle=True,
-        # )
+        # Filtra gli archi esistenti nel grafo attuale
+        existing_edges = self.graph['visit', 'has_received', 'drug'].edge_label_index.t().contiguous()
 
-        # Inspect a sample:
-        # sampled_data = next(iter(train_loader))
+        # Trova gli archi mancanti nel grafo attuale
+        missing_edges = torch.tensor(list(set(map(tuple, all_possible_edges.tolist())) - set(map(tuple, existing_edges.tolist())))).t().contiguous()
 
-        #print("Sampled mini-batch:")
-        #print("===================")
-        #print(next(iter(train_loader)))
+        self.graph['visit', 'has_received', 'drug'].edge_label_index = torch.cat([self.graph['visit', 'has_received', 'drug'].edge_label_index, missing_edges], dim=1)
+        self.graph['visit', 'has_received', 'drug'].edge_label = torch.cat([self.graph['visit', 'has_received', 'drug'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
 
-        return train_data
+        # Stampa gli archi mancanti
+        # print("Edges mancanti nel grafo attuale:")
+        # print(missing_edges.shape)
+
+        # Estensione della maschera con False per gli archi mancanti
+        mask = torch.cat([mask, torch.zeros(missing_edges.size(1), dtype=torch.bool)], dim=0)
+
+        # Stampa la maschera
+        # print("Maschera estesa:")
+        # print(mask.shape)
+
+        # Stampa il numero di True e False nella maschera
+        # print("Numero di True in mask:", torch.sum(mask).item())
+        # print("Numero di False in mask:", mask.size(0) - torch.sum(mask).item())
+
+        return mask
 
     def convert_batches(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         symp_df = pd.DataFrame({
@@ -524,13 +522,13 @@ class GNN(BaseModel):
 
         # Riempire la matrice con i valori di probabilità
         for i, visit in enumerate(unique_visits):
-            print('visit: ' + str(visit))
+            # print('visit: ' + str(visit))
             visit_data = df[df['Visit_ID'] == visit]
             for _, row in visit_data.iterrows():
                 drug_index = torch.tensor([np.where(unique_drugs == row['Drug_ID'])[0][0]], dtype=torch.long)
-                print('drug_index: ' + str(drug_index))
+                # print('drug_index: ' + str(drug_index))
                 y_prob_mat[i, drug_index] = torch.tensor([row['Prob']], dtype=torch.float)
-                print('prob: ' + str(row['Prob']))
+                # print('prob: ' + str(row['Prob']))
 
         return y_prob_mat
 
@@ -559,15 +557,15 @@ class GNN(BaseModel):
         # print('ATC_PRE_DICT: ' + str(self.atc_pre_dict))
         # print()
 
-        labels_index = self.label_tokenizer.batch_encode_2d(
-                self.drugs, padding=False, truncation=False
-            )
+        # labels_index = self.label_tokenizer.batch_encode_2d(
+        #         self.drugs, padding=False, truncation=False
+        #     )
         # print('labels_index: ' + str(labels_index))
         # print()
 
-        tokens = self.label_tokenizer.batch_decode_2d(
-                labels_index, padding=False
-            )
+        # tokens = self.label_tokenizer.batch_decode_2d(
+        #         labels_index, padding=False
+        #     )
         # print('tokens: ' + str(tokens))
         # print()
 
@@ -587,7 +585,10 @@ class GNN(BaseModel):
 
         self.train_loader = self.get_batches()
 
-        loss, pred = self.layer(self.train_loader)
+        self.mask = self.generate_mask()
+
+        # print(self.train_loader['visit', 'has_received', 'drug'].edge_label)
+        loss, pred = self.layer(self.train_loader, self.mask)
 
         self.y_prob = self.prepare_y_prob(pred)
 
