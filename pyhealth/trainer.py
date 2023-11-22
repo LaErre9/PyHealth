@@ -183,6 +183,7 @@ class Trainer:
 
         train_losses = []
         val_losses = []
+        prauc_losses = []
 
         # epoch training loop
         for epoch in range(epochs):
@@ -233,6 +234,7 @@ class Trainer:
                 logger.info(f"--- Eval epoch-{epoch}, step-{global_step} ---")
                 for key in scores.keys():
                     logger.info("{}: {:.4f}".format(key, scores[key]))
+                prauc_losses.append(scores['pr_auc_samples'])
                 val_losses.append(scores["loss"])
                 # save best model
                 if monitor is not None:
@@ -256,11 +258,13 @@ class Trainer:
 
         # Plotting
         epochs_range = range(1, epochs + 1)
-        plt.plot(epochs_range, train_losses, label='Training Loss')
-        plt.plot(epochs_range, val_losses, label='Validation Loss')
+        plt.plot(epochs_range, train_losses, label='Training Loss', marker='o')
+        plt.plot(epochs_range, val_losses, label='Validation Loss', marker='o')
+        plt.plot(epochs_range, prauc_losses, label='PRAUC', marker='*')
+
         plt.xlabel('Epoch')
-        plt.ylabel('Loss')
-        plt.title('Training and Validation Loss')
+        plt.ylabel('Loss/PRAUC')
+        plt.title('Training Loss, Validation Loss, and PRAUC over Epochs')
         plt.legend()
         plt.show()
 
