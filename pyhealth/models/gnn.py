@@ -1,48 +1,70 @@
 import torch
-import math
-import pkg_resources
 import numpy as np
 import pandas as pd
-from typing import Any, Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple
 
-from torch.nn.functional import binary_cross_entropy_with_logits
-from torch.nn.functional import multilabel_margin_loss
+import torch.nn.functional as F
+from torch.nn import Linear
 
 from torch_geometric.utils import negative_sampling
 from torch_geometric.data import HeteroData
 import torch_geometric.transforms as T
-from torch_geometric.loader import LinkNeighborLoader
 from torch_geometric.nn import SAGEConv, to_hetero
-import torch.nn.functional as F
 
 from pyhealth.models import BaseModel
-from pyhealth.models.utils import get_last_visit
-from pyhealth.models.utils import batch_to_multihot
 from pyhealth.datasets import SampleEHRDataset
 
-import torch.nn.functional as F
 
+#### Weights for the loss function to handle unbalanced classes:
+def compute_class_weights(y_true):
+    class_counts = torch.bincount(y_true.long())
+    total_samples = y_true.size(0)
+    class_weights = total_samples / (len(class_counts) * class_counts.float())
+    return class_weights
 
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
-    def __init__(self, hidden_channels, dropout=0.5):
+    def __init__(self, hidden_channels, dropout=0.2):
         super().__init__()
 
-        self.conv1 = SAGEConv(hidden_channels, hidden_channels)
-        self.conv2 = SAGEConv(hidden_channels, hidden_channels)
-        # self.dropout = torch.nn.Dropout(dropout)    # Add dropout layer
+        self.conv1 = SAGEConv((-1, -1), hidden_channels)
+        self.conv2 = SAGEConv((-1, -1), hidden_channels)
+        self.conv3 = SAGEConv((-1, -1), hidden_channels)
+        self.conv4 = SAGEConv((-1, -1), hidden_channels)
+        self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.conv1(x, edge_index))
-        x = self.conv2(x, edge_index)
-        # x = self.dropout(x)    # Add dropout layer
+        x = self.conv1(x, edge_index).relu()
+        x = self.dropout(x)
+        x = self.conv2(x, edge_index).relu()
+        x = self.dropout(x)
+        x = self.conv3(x, edge_index).relu()
+        x = self.dropout(x)
+        x = self.conv4(x, edge_index)
+        x = self.dropout(x)
+
         return x
 
 # Our final classifier applies the dot-product between source and destination
 # node embeddings to derive edge-level predictions:
-
-
 class Classifier(torch.nn.Module):
+    def __init__(self, hidden_channels):
+        super().__init__()
+        self.lin1 = Linear(2 * hidden_channels, hidden_channels)
+        self.lin2 = Linear(hidden_channels, 1)
+    
+    def forward(self, x_visit: torch.Tensor, x_drug: torch.Tensor, edge_label_index: torch.Tensor) -> torch.Tensor:
+        # Convert node embeddings to edge-level representations:
+        edge_feat_visit = x_visit[edge_label_index[0]]
+        edge_feat_drug = x_drug[edge_label_index[1]]
+
+        z = torch.cat([edge_feat_visit, edge_feat_drug], dim=-1)
+
+        z = self.lin1(z).relu()
+        z = self.lin2(z)
+
+        return z.view(-1)
+    """
     def forward(self, x_visit: torch.Tensor, x_drug: torch.Tensor, edge_label_index: torch.Tensor) -> torch.Tensor:
         # Convert node embeddings to edge-level representations:
         edge_feat_visit = x_visit[edge_label_index[0]]
@@ -53,6 +75,7 @@ class Classifier(torch.nn.Module):
         return (edge_feat_visit * edge_feat_drug).sum(dim=-1)
 
         # return cosine_sim
+    """
 
 class GNNLayer(torch.nn.Module):
     """GNN model.
@@ -91,15 +114,14 @@ class GNNLayer(torch.nn.Module):
         # Convert GNN model into a heterogeneous variant:
         self.gnn = to_hetero(self.gnn, metadata=data.metadata())
 
-        self.classifier = Classifier()
+        self.classifier = Classifier(hidden_channels)
 
     def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
-
         # print('y_true: ' + str(y_true[mask].shape))
         # print('pred: ' + str(pred[mask].shape))
 
-        loss = F.binary_cross_entropy_with_logits(pred[mask], y_true[mask])
+        loss = F.binary_cross_entropy_with_logits(pred, y_true)
 
         return loss
     
@@ -150,8 +172,8 @@ class GNN(BaseModel):
     def __init__(
         self,
         dataset: SampleEHRDataset,
-        embedding_dim: int = 32,
-        hidden_channels: int = 32,
+        embedding_dim: int = 128,
+        hidden_channels: int = 128,
         **kwargs,
     ):
         super(GNN, self).__init__(
