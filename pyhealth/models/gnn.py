@@ -1,5 +1,4 @@
 import torch
-import numpy as np
 import pandas as pd
 from typing import Dict, List, Tuple
 
@@ -52,7 +51,7 @@ class Classifier(torch.nn.Module):
         super().__init__()
         self.lin1 = Linear(2 * hidden_channels, hidden_channels)
         self.lin2 = Linear(hidden_channels, 1)
-    
+
     def forward(self, x_visit: torch.Tensor, x_label: torch.Tensor, edge_label_index: torch.Tensor) -> torch.Tensor:
         # Convert node embeddings to edge-level representations:
         edge_feat_visit = x_visit[edge_label_index[0]]
@@ -64,18 +63,6 @@ class Classifier(torch.nn.Module):
         z = self.lin2(z)
 
         return z.view(-1)
-    """
-    def forward(self, x_visit: torch.Tensor, x_label: torch.Tensor, edge_label_index: torch.Tensor) -> torch.Tensor:
-        # Convert node embeddings to edge-level representations:
-        edge_feat_visit = x_visit[edge_label_index[0]]
-        edge_feat_label = x_label[edge_label_index[1]]
-
-        # Calculate cosine similarity between edge features:
-        # cosine_sim = F.cosine_similarity(edge_feat_patient, edge_feat_label, dim=-1) # PROVA COSINE SIMILARITY
-        return (edge_feat_visit * edge_feat_label).sum(dim=-1)
-
-        # return cosine_sim
-    """
 
 class GNNLayer(torch.nn.Module):
     """GNN model.
@@ -120,13 +107,11 @@ class GNNLayer(torch.nn.Module):
 
     def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
-        # print('y_true: ' + str(y_true[mask].shape))
-        # print('pred: ' + str(pred[mask].shape))
 
         loss = F.binary_cross_entropy_with_logits(pred, y_true)
 
         return loss
-    
+
     def forward(self, data: HeteroData, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         x_dict = {
           "patient": self.pat_emb(data["patient"].node_id),
@@ -165,7 +150,7 @@ class GNN(BaseModel):
 
     Note:
         This model is only for diagnoses prediction / drug recommendation
-        which takes conditions, procedures, symptoms as feature_keys, 
+        which takes conditions, procedures, symptoms as feature_keys,
         and drugs as label_key. It only operates on the visit level.
 
     Note:
@@ -199,8 +184,6 @@ class GNN(BaseModel):
         self.hidden_channels = hidden_channels
         self.label_tokenizer = self.get_label_tokenizer()
 
-        # print('vocab_size: ' + str(self.label_tokenizer.vocabulary('A03A')))
-
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.get_dataframe()
 
         self.edge_index_patient_to_visit, self.edge_index_visit_to_symptom, \
@@ -209,11 +192,11 @@ class GNN(BaseModel):
 
         self.graph = self.graph_definition()
 
-        self.train_loader = self.get_batches()
+        self.graph = self.generate_neg_samples()
 
         self.mask = self.generate_mask()
 
-        self.layer = GNNLayer(self.train_loader, self.label_key, self.hidden_channels, self.embedding_dim)
+        self.layer = GNNLayer(self.graph, self.label_key, self.hidden_channels, self.embedding_dim)
 
     def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         """Gets the dataframe of conditions, procedures, symptoms and drugs of patients.
@@ -281,7 +264,7 @@ class GNN(BaseModel):
         # print('Num. Visits: ' + str(len(self.proc_df['HADM_ID'].unique())))
 
         # Creazione di un vocabolario unico dai codici HADM_ID
-        hadm_vocab = self.symp_df['HADM_ID'].unique()        
+        hadm_vocab = self.symp_df['HADM_ID'].unique()
         # Creazione di un vocabolario unico dai SUBJECT_ID
         subject_vocab = self.symp_df['SUBJECT_ID'].unique()
 
@@ -422,7 +405,7 @@ class GNN(BaseModel):
 
         return edge_index_patient_to_visit, edge_index_visit_to_symptom, edge_index_visit_to_disease, \
                edge_index_visit_to_procedure, edge_index_visit_to_drug
-    
+
     def graph_definition(self) -> HeteroData:
         # Creazione del grafo
         graph = HeteroData()
@@ -458,25 +441,25 @@ class GNN(BaseModel):
 
         return graph
 
-    def get_batches(self) -> HeteroData:
+    def generate_neg_samples(self) -> HeteroData:
         if self.label_key == "drugs":
             neg_edges = negative_sampling(self.graph['visit', 'has_received', 'drug'].edge_index, num_nodes=(self.graph['visit'].num_nodes,self.graph['drug'].num_nodes))
-            
+
             self.graph['visit', 'has_received', 'drug'].edge_label_index = self.graph['visit', 'has_received', 'drug'].edge_index
             self.graph['visit', 'has_received', 'drug'].edge_label = torch.ones(self.graph['visit', 'has_received', 'drug'].edge_label_index.shape[1], dtype=torch.float)
             self.graph['visit', 'has_received', 'drug'].edge_label_index = torch.cat((self.graph['visit', 'has_received', 'drug'].edge_label_index, neg_edges), dim=1)
             self.graph['visit', 'has_received', 'drug'].edge_label = torch.cat((self.graph['visit', 'has_received', 'drug'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
-            
+
             # print(self.graph['visit', 'has_received', 'drug'].edge_label_index.shape)
             # print(self.graph['visit', 'has_received', 'drug'].edge_label)
         else:
             neg_edges = negative_sampling(self.graph['visit', 'has', 'disease'].edge_index, num_nodes=(self.graph['visit'].num_nodes,self.graph['drug'].num_nodes))
-            
+
             self.graph['visit', 'has', 'disease'].edge_label_index = self.graph['visit', 'has', 'disease'].edge_index
             self.graph['visit', 'has', 'disease'].edge_label = torch.ones(self.graph['visit', 'has', 'disease'].edge_label_index.shape[1], dtype=torch.float)
             self.graph['visit', 'has', 'disease'].edge_label_index = torch.cat((self.graph['visit', 'has', 'disease'].edge_label_index, neg_edges), dim=1)
             self.graph['visit', 'has', 'disease'].edge_label = torch.cat((self.graph['visit', 'has', 'disease'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
-            
+
             # print(self.graph['visit', 'has', 'disease'].edge_label_index.shape)
             # print(self.graph['visit', 'has', 'disease'].edge_label)
 
@@ -568,61 +551,30 @@ class GNN(BaseModel):
 
     def create_y_prob_mat(self) -> torch.Tensor:
         if self.label_key == "drugs":
-            data = {
-                'Visit_ID': [], 
-                'Drug_ID': [], 
-                'Prob': []
-            }
-            edge_label_full = (self.train_loader["visit", "has_received", "drug"].edge_label_index).cpu().numpy()
+            edge_label_full = self.graph["visit", "has_received", "drug"].edge_label_index
         else:
-            data = {
-                'Visit_ID': [], 
-                'Disease_ID': [], 
-                'Prob': []
-            }
-            edge_label_full = (self.train_loader["visit", "has", "disease"].edge_label_index).cpu().numpy()
+            edge_label_full = self.graph["visit", "has", "disease"].edge_label_index
 
-        prob_full = self.y_prob.detach().cpu().numpy()
-        vis = edge_label_full[0]
-        lab = edge_label_full[1]
-        for i in range(0,len(vis)):
-            data['Visit_ID'].append(vis[i])
-            if self.label_key == "drugs":
-                data['Drug_ID'].append(lab[i])
-            else:
-                data['Disease_ID'].append(lab[i])
-            data['Prob'].append(prob_full[i])
+        prob_full = self.y_prob.detach()
 
-        df = pd.DataFrame(data)
-        # Creare una lista di visite uniche e di drug uniche
-        unique_visits = df['Visit_ID'].unique()
-        if self.label_key == "drugs":
-            df.sort_values(by=['Drug_ID'], ascending=[True], inplace=True)
-            unique_drugs = df['Drug_ID'].unique()
-        else:
-            df.sort_values(by=['Disease_ID'], ascending=[True], inplace=True)
-            unique_diseases = df['Disease_ID'].unique()
+        unique_visits, indices = torch.unique(edge_label_full[0], return_inverse=True)
+        unique_labels, label_indices = torch.unique(edge_label_full[1], return_inverse=True)
 
-        # Creare una matrice di zeri con dimensioni (num. visite, num. drug distinte)
-        y_prob_mat = torch.zeros(len(unique_visits), self.label_tokenizer.get_vocabulary_size())
+        combined_indices = indices * len(unique_labels) + label_indices
+        sorted_combined_indices = torch.argsort(combined_indices)
 
-        # Riempire la matrice con i valori di probabilità
-        for i, visit in enumerate(unique_visits):
-            # print('visit: ' + str(visit))
-            visit_data = df[df['Visit_ID'] == visit]
-            for _, row in visit_data.iterrows():
-                if self.label_key == "drugs":
-                    drug_index = torch.tensor([np.where(unique_drugs == row['Drug_ID'])[0][0]], dtype=torch.long)
-                    # print('drug_index: ' + str(drug_index))
-                    y_prob_mat[i, drug_index] = torch.tensor([row['Prob']], dtype=torch.float)
-                    # print('prob: ' + str(row['Prob']))
-                else:
-                    disease_index = torch.tensor([np.where(unique_diseases == row['Disease_ID'])[0][0]], dtype=torch.long)
-                    # print('disease_index: ' + str(disease_index))
-                    y_prob_mat[i, disease_index] = torch.tensor([row['Prob']], dtype=torch.float)
-                    # print('prob: ' + str(row['Prob']))
+        unique_combined_indices, unique_indices = torch.unique(sorted_combined_indices, return_inverse=True)
+
+        sorted_visits = unique_combined_indices // len(unique_labels)
+        sorted_labels = unique_combined_indices % len(unique_labels)
+
+        y_prob_mat = torch.zeros(len(unique_visits), len(unique_labels), device=self.device)
+
+        # Indexing directly into the tensor to fill values
+        y_prob_mat[sorted_visits, sorted_labels] = prob_full[sorted_combined_indices]
 
         return y_prob_mat
+
 
     def forward(
         self,
@@ -642,60 +594,38 @@ class GNN(BaseModel):
         self.symptoms = symptoms
         self.drugs = drugs
 
-        # print('visit_id: ' + str(visit_id))
-        # print('drugs: ' + str(drugs))
-        # print('----------------------------------')
-
-        # print('ATC_PRE_DICT: ' + str(self.atc_pre_dict))
-        # print()
-
-        # labels_index = self.label_tokenizer.batch_encode_2d(
-        #         self.drugs, padding=False, truncation=False
-        #     )
-        # print('labels_index: ' + str(labels_index))
-        # print()
-
-        # tokens = self.label_tokenizer.batch_decode_2d(
-        #         labels_index, padding=False
-        #     )
-        # print('tokens: ' + str(tokens))
-        # print()
-
-        # obtain y_true, loss, y_prob
         if self.label_key == "drugs":
             y_true = self.prepare_labels(self.drugs, self.label_tokenizer)
         else:
             y_true = self.prepare_labels(self.conditions, self.label_tokenizer)
 
-        # print('y_true: ' + str(y_true))
-        # print()
-
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.convert_batches()
 
-        self.edge_index_patient_to_visit, self.edge_index_visit_to_symptom, \
-            self.edge_index_visit_to_disease, self.edge_index_visit_to_procedure, \
-            self.edge_index_visit_to_drug = self.get_edge_index()
+        (
+            self.edge_index_patient_to_visit,
+            self.edge_index_visit_to_symptom,
+            self.edge_index_visit_to_disease,
+            self.edge_index_visit_to_procedure,
+            self.edge_index_visit_to_drug,
+        ) = self.get_edge_index()
 
         self.graph = self.graph_definition()
 
-        self.train_loader = self.get_batches()
-        self.train_loader = self.train_loader.to(device=self.device)
+        self.graph = self.generate_neg_samples()
 
         self.mask = self.generate_mask()
 
-        # print(self.train_loader['visit', 'has_received', 'drug'].edge_label)
-        loss, pred = self.layer(self.train_loader, self.mask)
+        self.graph = self.graph.to(device=self.device)
+
+        loss, pred = self.layer(self.graph, self.mask)
 
         self.y_prob = self.prepare_y_prob(pred)
 
         y_prob_mat = self.create_y_prob_mat()
 
         loss = loss.to(device=self.device)
-        y_true = y_true.to(device=self.device)
         y_prob_mat = y_prob_mat.to(device=self.device)
-
-        # print('y_prob_mat: ' + str(y_prob_mat))
-        # print()
+        y_true = y_true.to(device=self.device)
 
         return {
             "loss": loss,
