@@ -1,3 +1,4 @@
+import os
 import torch
 import pandas as pd
 from typing import Dict, List, Tuple
@@ -169,6 +170,9 @@ class GNN(BaseModel):
         dataset: SampleEHRDataset,
         feature_keys: List[str],
         label_key: str,
+        root: str = None,
+        static_kg: List[str] = None,
+        k: int = 1,
         embedding_dim: int = 128,
         hidden_channels: int = 128,
         **kwargs,
@@ -180,15 +184,20 @@ class GNN(BaseModel):
             mode="multilabel",
         )
 
+        self.root = root
+        self.static_kg = static_kg
+        self.k = k
         self.embedding_dim = embedding_dim
         self.hidden_channels = hidden_channels
         self.label_tokenizer = self.get_label_tokenizer()
 
-        self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.get_dataframe()
+        self.proc_df, self.symp_df, self.drug_df, self.diag_df, self.stat_kg_df = self.get_dataframe()
+
+        # print(self.stat_kg_df)
 
         self.edge_index_patient_to_visit, self.edge_index_visit_to_symptom, \
             self.edge_index_visit_to_disease, self.edge_index_visit_to_procedure, \
-            self.edge_index_visit_to_drug = self.get_edge_index()
+            self.edge_index_visit_to_drug, self.edge_index_disease_to_symptom = self.get_edge_index()
 
         self.graph = self.graph_definition()
 
@@ -198,7 +207,7 @@ class GNN(BaseModel):
 
         self.layer = GNNLayer(self.graph, self.label_key, self.hidden_channels, self.embedding_dim)
 
-    def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Dict[str, pd.DataFrame]]:
         """Gets the dataframe of conditions, procedures, symptoms and drugs of patients.
 
         Returns:
@@ -251,9 +260,24 @@ class GNN(BaseModel):
                                         'ICD9_CODE': diagnoses_data})
             DIAGNOSES = pd.concat([DIAGNOSES, diagnoses_df], ignore_index=True)
 
-        return PROCEDURES, SYMPTOMS, DRUGS, DIAGNOSES
+        if self.static_kg is not None:
+            STATIC_KG_DF = {}
+            for relation in self.static_kg:
+                # print("Loading static knowledge graph: " + relation)
+                # print("K: " + str(self.k))
+                # print("Root: " + str(self.root))
+                # read table
+                STATIC_KG_DF[relation] = pd.read_csv(
+                    os.path.join(self.root, f"{relation}.csv"),
+                    low_memory=False,
+                    index_col=0,
+                )
 
-    def get_edge_index(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+                # print(STATIC_KG_DF[relation].head(10))
+
+        return PROCEDURES, SYMPTOMS, DRUGS, DIAGNOSES, STATIC_KG_DF
+
+    def get_edge_index(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """Generates the graph.
 
         Returns:
@@ -398,13 +422,43 @@ class GNN(BaseModel):
 
         edge_index_visit_to_drug = torch.stack([hasreceived_visit_id, hasreceived_drug_id], dim=0)
 
-        # print('Dimension of edge index: ' + str(edge_index_visit_to_drug.shape))
-        # print("Final edge indices pointing from visits to drugs:")
-        # print("=================================================")
-        # print(edge_index_visit_to_drug)
+        if self.static_kg is not None:
+            for relation in self.static_kg:
+                if relation == "DIAG_SYMP":
+                    # =============== MAPPING DIAG_SYMP ===========================
+                    diag_symp_df = self.stat_kg_df[relation].astype(str).copy()
+                    diag_symp_df = diag_symp_df[diag_symp_df["DIS"].isin(icd9_diag_vocab)]
+                    # print(diag_symp_df.head(10))
+                    # print(diag_symp_df.shape)
+
+                    # Sostituzione dei valori nella colonna 'ICD9_CODE' con i corrispondenti indici nel vocabolario
+                    diag_symp_df['DIS'] = diag_symp_df['DIS'].map(icd9_diag_dict)
+
+                    # Trova l'indice dell'ultimo elemento nel dizionario
+                    last_index = max(icd9_symp_dict.values())
+
+                    # Aggiungi i nuovi sintomi al dizionario con indici consecutivi
+                    for symptom_code in diag_symp_df['SYMP'].unique():
+                        if symptom_code not in icd9_symp_dict:
+                            last_index += 1
+                            icd9_symp_dict[symptom_code] = last_index
+                            self.symp_df = pd.concat([self.symp_df, pd.DataFrame({'SUBJECT_ID': [0], 'HADM_ID': [0], 'SEQ_NUM': [0], 'ICD9_CODE': [symptom_code]})], ignore_index=True)
+                    diag_symp_df['SYMP'] = diag_symp_df['SYMP'].astype(str).map(icd9_symp_dict)
+
+                    hasbeencaused_diag_id = torch.from_numpy(diag_symp_df['DIS'].values)
+                    hasbeencaused_symp_id = torch.from_numpy(diag_symp_df['SYMP'].values)
+
+                    edge_index_disease_to_symptom = torch.stack([hasbeencaused_diag_id, hasbeencaused_symp_id], dim=0)
+
+                    # print('Dimension of edge index: ' + str(edge_index_disease_to_symptom.shape))
+                    # print("Final edge indices pointing from diseases to symptoms:")
+                    # print("=================================================")
+                    # print(edge_index_disease_to_symptom)
+        else:
+            edge_index_disease_to_symptom = None
 
         return edge_index_patient_to_visit, edge_index_visit_to_symptom, edge_index_visit_to_disease, \
-               edge_index_visit_to_procedure, edge_index_visit_to_drug
+               edge_index_visit_to_procedure, edge_index_visit_to_drug, edge_index_disease_to_symptom
 
     def graph_definition(self) -> HeteroData:
         # Creazione del grafo
@@ -429,6 +483,11 @@ class GNN(BaseModel):
         graph["visit", "has", "disease"].edge_index = self.edge_index_visit_to_disease
         graph["visit", "has_treat", "procedure"].edge_index = self.edge_index_visit_to_procedure
         graph["visit", "has_received", "drug"].edge_index = self.edge_index_visit_to_drug
+
+        if self.static_kg is not None:
+            for relation in self.static_kg:
+                if relation == "DIAG_SYMP":
+                    graph["disease", "has_been_caused_by", "symptom"].edge_index = self.edge_index_disease_to_symptom
 
         # We also need to make sure to add the reverse edges from movies to users
         # in order to let a GNN be able to pass messages in both directions.
@@ -575,7 +634,6 @@ class GNN(BaseModel):
 
         return y_prob_mat
 
-
     def forward(
         self,
         patient_id: List[str],
@@ -607,6 +665,7 @@ class GNN(BaseModel):
             self.edge_index_visit_to_disease,
             self.edge_index_visit_to_procedure,
             self.edge_index_visit_to_drug,
+            self.edge_index_disease_to_symptom
         ) = self.get_edge_index()
 
         self.graph = self.graph_definition()
