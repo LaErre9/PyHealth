@@ -79,7 +79,6 @@ class GNNLayer(torch.nn.Module):
     Args:
         hidden_channels: hidden feature size.
     """
-
     def __init__(
         self,
         data: HeteroData,
@@ -123,8 +122,15 @@ class GNNLayer(torch.nn.Module):
 
     def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
-
-        loss = F.binary_cross_entropy_with_logits(pred, y_true)
+        # # Calculate class weights
+        # class_weights = compute_class_weights(y_true)
+ 
+        # # Create a tensor of weights for each datapoint
+        class_weights = torch.tensor([0.5, 1])
+        sample_weights = class_weights[y_true.long()]
+ 
+        # Calculate the loss for each prediction
+        loss = F.binary_cross_entropy_with_logits(pred, y_true, weight=sample_weights)
 
         return loss
 
@@ -168,9 +174,7 @@ class GNNLayer(torch.nn.Module):
         return loss, pred
 
 class GNN(BaseModel):
-    """GNN model.
-
-    Our Model.
+    """GNN Model.
 
     Note:
         This model is only for diagnoses prediction / drug recommendation
@@ -178,7 +182,7 @@ class GNN(BaseModel):
         and drugs as label_key. It only operates on the visit level.
 
     Note:
-        This model only accepts ATC level 3 as medication codes.
+        This model accepts every ATC level as medication codes.
 
     Args:
         dataset: the dataset to train the model. It is used to query certain
@@ -187,7 +191,6 @@ class GNN(BaseModel):
         hidden_channels: the hidden channels. Default is 32.
         **kwargs: other parameters for the GNN layer.
     """
-
     def __init__(
         self,
         dataset: SampleEHRDataset,
@@ -250,7 +253,7 @@ class GNN(BaseModel):
         DIAGNOSES = pd.DataFrame(columns=['SUBJECT_ID', 'HADM_ID', 'SEQ_NUM', 'ICD9_CODE'])
 
 
-        # Loop attraverso i pazienti e aggiungi le informazioni ai DataFrame
+        # Loop over all patients
         for patient_data in self.dataset:
             subject_id = patient_data['patient_id']
             hadm_id = patient_data['visit_id']
@@ -291,7 +294,7 @@ class GNN(BaseModel):
                                         'ICD9_CODE': diagnoses_data})
             DIAGNOSES = pd.concat([DIAGNOSES, diagnoses_df], ignore_index=True)
 
-        # GRAPH ENRICHMENT
+        # ==== GRAPH ENRICHMENT ====
         STATIC_KG_DF = {}
 
         if self.k > 0:
@@ -306,7 +309,6 @@ class GNN(BaseModel):
                     low_memory=False,
                     index_col=0,
                 )
-            # print(STATIC_KG_DF)
 
         return PROCEDURES, SYMPTOMS, DRUGS, DIAGNOSES, STATIC_KG_DF
 
@@ -318,43 +320,43 @@ class GNN(BaseModel):
             A tuple of dictionaries containing the mappings for HADM_ID, SUBJECT_ID, ICD9_CODE (symptoms),
             ICD9_CODE (diagnoses), ICD9_CODE (procedures), and ATC_CODE (drugs).
         """
-        # VOCABOLARIO DELLE VISITE
-        # Creazione di un vocabolario unico dai codici HADM_ID
+        # VOCABULARY OF VISITS
+        # Create a unique vocabulary from the HADM_ID
         hadm_vocab = self.symp_df['HADM_ID'].unique()
-        # Creazione di un dizionario che mappa il HADM_ID al suo indice nel vocabolario
+        # Create a dictionary that maps the HADM_ID to its index in the vocabulary
         hadm_dict = {code: i for i, code in enumerate(hadm_vocab)}
 
-        # VOCABOLARIO DEI PAZIENTI
-        # Creazione di un vocabolario unico dai SUBJECT_ID
+        # VOCABULARY OF PATIENTS
+        # Create a unique vocabulary from the SUBJECT_ID
         subject_vocab = self.symp_df['SUBJECT_ID'].unique()
-        # Creazione di un dizionario che mappa il SUBJECT_ID al suo indice nel vocabolario
+        # Create a dictionary that maps the SUBJECT_ID to its index in the vocabulary
         subject_dict = {code: i for i, code in enumerate(subject_vocab)}
 
-        # VOCABOLARIO DEI SINTOMI
-        # Creazione di un vocabolario unico dai codici ICD9_CODE
+        # VOCABULARY OF SYMPTOMS
+        # Create a unique vocabulary from the ICD9_CODE
         icd9_symp_vocab = self.symp_df['ICD9_CODE'].unique()
-        # Creazione di un dizionario che mappa il codice ICD9_CODE al suo indice nel vocabolario
+        # Create a dictionary that maps the ICD9_CODE to its index in the vocabulary
         icd9_symp_dict = {code: i for i, code in enumerate(icd9_symp_vocab)}
 
-        # VOCAOLARIO DELLE DIAGNOSI
-        # Creazione di un vocabolario unico dai codici ICD9_CODE
+        # VOCABULARY OF DIAGNOSES
+        # Create a unique vocabulary from the ICD9_CODE
         icd9_diag_vocab = self.diag_df['ICD9_CODE'].unique()
-        # Creazione di un dizionario che mappa il codice ICD9_CODE al suo indice nel vocabolario
+        # Create a dictionary that maps the ICD9_CODE to its index in the vocabulary
         if self.label_key == "conditions":
             icd9_diag_dict = {code: self.label_tokenizer.vocabulary(code) for code in icd9_diag_vocab}
         else:
             icd9_diag_dict = {code: i for i, code in enumerate(icd9_diag_vocab)}
 
-        # VOCABOLARIO DEI PROCEDURE
-        # Creazione di un vocabolario unico dai codici ICD9_CODE
+        # VOCABULARY OF PROCEDURES
+        # Create a unique vocabulary from the ICD9_CODE
         icd9_proc_vocab = self.proc_df['ICD9_CODE'].unique()
-        # Creazione di un dizionario che mappa il codice ICD9_CODE al suo indice nel vocabolario
+        # Create a dictionary that maps the ICD9_CODE to its index in the vocabulary
         icd9_proc_dict = {code: i for i, code in enumerate(icd9_proc_vocab)}
 
-        # VOCABOLARIO DEI FARMACI
-        # Creazione di un vocabolario unico dai codici ATC
+        # VOCABULARY OF DRUGS
+        # Create a unique vocabulary from the ATC_CODE
         atc_pre_vocab = self.drug_df['ATC_CODE'].unique()
-        # Creazione di un dizionario che mappa il codice ATC al suo indice nel vocabolario
+        # Create a dictionary that maps the ATC_CODE to its index in the vocabulary
         if self.label_key == "drugs":
             atc_pre_dict = {code: self.label_tokenizer.vocabulary(code) for code in atc_pre_vocab}
         else:
@@ -380,105 +382,74 @@ class GNN(BaseModel):
             - edge_index_symptom_to_drug: Edge indices pointing from symptoms to drugs.
         """
         # =============== MAPPING VISITS ===========================
-        # print('Num. Patients: ' + str(len(self.proc_df['SUBJECT_ID'].unique())))
-        # print('Num. Visits: ' + str(len(self.proc_df['HADM_ID'].unique())))
-
-        # Sostituzione dei valori nella colonna 'HADM_ID' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
         self.symp_df['HADM_ID'] = self.symp_df['HADM_ID'].map(self.hadm_dict)
-        # Sostituzione dei valori nella colonna 'SUBJECT_ID' con i corrispondenti indici nel vocabolario
+        
+        # Substituting the values in the 'SUBJECT_ID' column with the corresponding indices in the vocabulary
         self.symp_df['SUBJECT_ID'] = self.symp_df['SUBJECT_ID'].map(self.subject_dict)
 
         has_patient_id = torch.from_numpy(self.symp_df['SUBJECT_ID'].values)
         has_visit_id = torch.from_numpy(self.symp_df['HADM_ID'].values)
 
+        # Create the edge index for the relationship 'has' between patients and visits
         edge_index_patient_to_visit = torch.stack([has_patient_id, has_visit_id], dim=0)
 
-        # print('Dimension of edge index: ' + str(edge_index_patient_to_visit.shape))
-        # print("Final edge indices pointing from patients to visits:")
-        # print("=================================================")
-        # print(edge_index_patient_to_visit)
-        # print("=================================================")
-
         # =============== MAPPING SYMPTOMS ===========================
-        # print('Num. Visits: ' + str(len(self.symp_df['HADM_ID'].unique())))
-        # print('Num. Symptoms: ' + str(len(self.symp_df['ICD9_CODE'].unique())))
-
-        # Sostituzione dei valori nella colonna 'ICD9_CODE' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
         self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
 
         presents_visit_id = torch.from_numpy(self.symp_df['HADM_ID'].values)
         presents_symptom_id = torch.from_numpy(self.symp_df['ICD9_CODE'].values)
 
+        # Create the edge index for the relationship 'presents' between visits and symptoms
         edge_index_visit_to_symptom = torch.stack([presents_visit_id, presents_symptom_id], dim=0)
 
-        # print('Dimension of edge index: ' + str(edge_index_visit_to_symptom.shape))
-        # print("Final edge indices pointing from visits to symptoms:")
-        # print("=================================================")
-        # print(edge_index_visit_to_symptom)
-        # print("=================================================")
-
         # =============== MAPPING DIAGNOSES ===========================
-        # print('Num. Visits: ' + str(len(self.diag_df['HADM_ID'].unique())))
-        # print('Num. Diseases: ' + str(len(self.diag_df['ICD9_CODE'].unique())))
-
-        # Sostituzione dei valori nella colonna 'ICD9_CODE' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
         self.diag_df['ICD9_CODE_DIAG'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
-        # Sostituzione dei valori nella colonna 'HADM_ID' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
         self.diag_df['HADM_ID'] = self.diag_df['HADM_ID'].map(self.hadm_dict)
 
+        # Drop the 'ICD9_CODE' column that is no longer needed
         self.diag_df.drop('ICD9_CODE', axis=1, inplace=True)
 
         hasdisease_visit_id = torch.from_numpy(self.diag_df['HADM_ID'].values)
         hasdisease_disease_id = torch.from_numpy(self.diag_df['ICD9_CODE_DIAG'].values)
 
+        # Create the edge index for the relationship 'has' between visits and diseases
         edge_index_visit_to_disease = torch.stack([hasdisease_visit_id, hasdisease_disease_id], dim=0)
 
-        # print('Dimension of edge index: ' + str(edge_index_visit_to_disease.shape))
-        # print("Final edge indices pointing from visits to diseases:")
-        # print("=================================================")
-        # print(edge_index_visit_to_disease)
-        # print("=================================================")
-
         # =============== MAPPING PROCEDURES ===========================
-        # print('Num. Visits: ' + str(len(self.proc_df['HADM_ID'].unique())))
-        # print('Num. Procedures: ' + str(len(self.proc_df['ICD9_CODE'].unique())))
-
-        # Sostituzione dei valori nella colonna 'ICD9_CODE' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
         self.proc_df['ICD9_CODE_PROC'] = self.proc_df['ICD9_CODE'].map(self.icd9_proc_dict)
-        # Sostituzione dei valori nella colonna 'HADM_ID' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
         self.proc_df['HADM_ID'] = self.proc_df['HADM_ID'].map(self.hadm_dict)
 
+        # Drop the 'ICD9_CODE' column that is no longer needed
         self.proc_df.drop('ICD9_CODE', axis=1, inplace=True)
 
         hastreat_visit_id = torch.from_numpy(self.proc_df['HADM_ID'].values)
         hastreat_procedure_id = torch.from_numpy(self.proc_df['ICD9_CODE_PROC'].values)
 
+        # Create the edge index for the relationship 'has_treat' between visits and procedures
         edge_index_visit_to_procedure = torch.stack([hastreat_visit_id, hastreat_procedure_id], dim=0)
 
-        # print('Dimension of edge index: ' + str(edge_index_visit_to_procedure.shape))
-        # print("Final edge indices pointing from visits to procedures:")
-        # print("=================================================")
-        # print(edge_index_visit_to_procedure)
-        # print("=================================================")
-
         # =============== MAPPING DRUGS ===========================
-        # print('Num. Visits: ' + str(len(self.drug_df['HADM_ID'].unique())))
-        # print('Num. Drugs: ' + str(len(self.drug_df['ATC_CODE'].unique())))
-
-        # Sostituzione dei valori nella colonna 'ATC' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'ATC_CODE' column with the corresponding indices in the vocabulary
         self.drug_df['ATC_CODE_PRE'] = self.drug_df['ATC_CODE'].map(self.atc_pre_dict)
-        # Sostituzione dei valori nella colonna 'HADM_ID' con i corrispondenti indici nel vocabolario
+        # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
         self.drug_df['HADM_ID'] = self.drug_df['HADM_ID'].map(self.hadm_dict)
 
+        # Drop the 'ATC_CODE' column that is no longer needed
         self.drug_df.drop('ATC_CODE', axis=1, inplace=True)
-        # self.drug_df.drop(['SUBJECT_ID','ATC_CODE_PRE'], axis=1, inplace=True)
 
         hasreceived_visit_id = torch.from_numpy(self.drug_df['HADM_ID'].values)
         hasreceived_drug_id = torch.from_numpy(self.drug_df['ATC_CODE_PRE'].values)
 
+        # Create the edge index for the relationship 'has_received' between visits and drugs
         edge_index_visit_to_drug = torch.stack([hasreceived_visit_id, hasreceived_drug_id], dim=0)
 
-        # ====GRAPH ENRICHMENT====
+        # ==== GRAPH ENRICHMENT ====
         edge_index_disease_to_symptom = None
         edge_index_anatomy_to_diagnosis = None
         edge_index_diagnosis_to_drug = None
@@ -489,16 +460,17 @@ class GNN(BaseModel):
             for relation in self.static_kg:
                 if relation == "DIAG_SYMP":
                     # =============== MAPPING DIAG_SYMP ===========================
+                    # Copy the dataframe with the relationship DIAG_SYMP
                     diag_symp_df = self.stat_kg_df[relation].astype(str).copy()
                     diag_symp_df = diag_symp_df[diag_symp_df["DIAG"].isin(self.icd9_diag_dict.keys())]
 
-                    # Sostituzione dei valori nella colonna 'ICD9_CODE' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'DIAG' column with the corresponding indices in the vocabulary
                     diag_symp_df['DIAG'] = diag_symp_df['DIAG'].map(self.icd9_diag_dict)
 
-                    # Trova l'indice dell'ultimo elemento nel dizionario
+                    # Lookup the indices of the symptoms in the vocabulary
                     last_index = max(self.icd9_symp_dict.values())
 
-                    # Aggiungi i nuovi sintomi al dizionario con indici consecutivi
+                    # Add the new symptoms to the dictionary with consecutive indices
                     for symptom_code in diag_symp_df['SYMP'].unique():
                         if symptom_code not in self.icd9_symp_dict:
                             last_index += 1
@@ -506,29 +478,28 @@ class GNN(BaseModel):
                             self.symp_df = pd.concat([self.symp_df, pd.DataFrame({'SUBJECT_ID': [0], 'HADM_ID': [0], 'SEQ_NUM': [0], 'ICD9_CODE': [symptom_code]})], ignore_index=True)
                     diag_symp_df['SYMP'] = diag_symp_df['SYMP'].map(self.icd9_symp_dict)
 
-                    hasbeencaused_diag_id = torch.from_numpy(diag_symp_df['DIAG'].values)
-                    hasbeencaused_symp_id = torch.from_numpy(diag_symp_df['SYMP'].values)
-
-                    edge_index_disease_to_symptom = torch.stack([hasbeencaused_diag_id, hasbeencaused_symp_id], dim=0)
-
-                    # print('Dimension of edge index: ' + str(edge_index_disease_to_symptom.shape))
-                    # print("Final edge indices pointing from diseases to symptoms:")
-                    # print("=================================================")
-                    # print(edge_index_disease_to_symptom)
+                    if not anat_diag_df.empty:
+                        hasbeencaused_diag_id = torch.from_numpy(diag_symp_df['DIAG'].values)
+                        hasbeencaused_symp_id = torch.from_numpy(diag_symp_df['SYMP'].values)
+                        edge_index_disease_to_symptom = torch.stack([hasbeencaused_diag_id, hasbeencaused_symp_id], dim=0)
+                    else:
+                        # Initialize edge_index_disease_to_symptom as empty if the DataFrame is empty
+                        edge_index_disease_to_symptom = torch.empty((2, 0), dtype=torch.int64)
 
                 elif (relation == "ANAT_DIAG") and self.k == 2:
                     # =============== MAPPING ANAT_DIAG ===========================
+                    # Copy the dataframe with the relationship ANAT_DIAG
                     anat_diag_df = self.stat_kg_df[relation].astype(str).copy()
                     anat_diag_df = anat_diag_df[anat_diag_df["DIAG"].isin(self.icd9_diag_dict.keys())]
 
-                    # Creazione di un vocabolario unico dai codici UBERON
+                    # Create a unique vocabulary from the codici UBERON
                     uberon_anat_vocab = anat_diag_df['ANAT'].unique()
-                    # Creazione di un dizionario che mappa il codice UBERON al suo indice nel vocabolario
+                    # Create a dictionary that maps the codici UBERON to their index in the vocabulary
                     uberon_anat_dict = {code: i for i, code in enumerate(uberon_anat_vocab)}
 
-                    # Sostituzione dei valori nella colonna 'DIAG' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'DIAG' column with the corresponding indices in the vocabulary
                     anat_diag_df['DIAG'] = anat_diag_df['DIAG'].map(self.icd9_diag_dict)
-                    # Sostituzione dei valori nella colonna 'ANAT' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'ANAT' column with the corresponding indices in the vocabulary
                     anat_diag_df['ANAT'] = anat_diag_df['ANAT'].map(uberon_anat_dict)
 
                     if not anat_diag_df.empty:
@@ -536,72 +507,66 @@ class GNN(BaseModel):
                         localizes_anat_id = torch.from_numpy(anat_diag_df['ANAT'].values)
                         edge_index_anatomy_to_diagnosis = torch.stack([localizes_diag_id, localizes_anat_id], dim=0)
                     else:
-                        # Fai qualcosa se il DataFrame è vuoto, ad esempio inizializza edge_index_anatomy_to_diagnosis come vuoto
+                        # Initialize edge_index_anatomy_to_diagnosis as empty if the DataFrame is empty
                         edge_index_anatomy_to_diagnosis = torch.empty((2, 0), dtype=torch.int64)
-
-                    # print('Dimension of edge index: ' + str(edge_index_anatomy_to_diagnosis.shape))
-                    # print("Final edge indices pointing from anatomy to diagnosis:")
-                    # print("=================================================")
-                    # print(edge_index_anatomy_to_diagnosis)
 
                 elif relation == "DRUG_DIAG":
                     # =============== MAPPING DRUG_DIAG ===========================
+                    # Copy the dataframe with the relationship DRUG_DIAG
                     drug_diag_df = self.stat_kg_df[relation].astype(str).copy()
                     drug_diag_df = drug_diag_df[drug_diag_df["DIAG"].isin(self.icd9_diag_dict.keys())]
                     drug_diag_df = drug_diag_df[drug_diag_df["DRUG"].isin(self.atc_pre_dict.keys())]
 
-                    # Sostituzione dei valori nella colonna 'DIAG' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'DIAG' column with the corresponding indices in the vocabulary
                     drug_diag_df['DIAG'] = drug_diag_df['DIAG'].map(self.icd9_diag_dict)
-                    # Sostituzione dei valori nella colonna 'DIAG' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'DRUG' column with the corresponding indices in the vocabulary
                     drug_diag_df['DRUG'] = drug_diag_df['DRUG'].map(self.atc_pre_dict)
 
-                    treats_diag_id = torch.from_numpy(drug_diag_df['DIAG'].values)
-                    treats_drug_id = torch.from_numpy(drug_diag_df['DRUG'].values)
-
-                    edge_index_diagnosis_to_drug = torch.stack([treats_diag_id, treats_drug_id], dim=0)
-
-                    # print('Dimension of edge index: ' + str(edge_index_diagnosis_to_drug.shape))
-                    # print("Final edge indices pointing from diagnosis to drug:")
-                    # print("=================================================")
-                    # print(edge_index_diagnosis_to_drug)
+                    if not drug_diag_df.empty:
+                        treats_diag_id = torch.from_numpy(drug_diag_df['DIAG'].values)
+                        treats_drug_id = torch.from_numpy(drug_diag_df['DRUG'].values)
+                        edge_index_diagnosis_to_drug = torch.stack([treats_diag_id, treats_drug_id], dim=0)
+                    else:
+                        # Initialize edge_index_diagnosis_to_drug as empty if the DataFrame is empty
+                        edge_index_diagnosis_to_drug = torch.empty((2, 0), dtype=torch.int64)
 
                 elif (relation == "PC_DRUG") and (self.k == 2):
                     # =============== MAPPING PC_DRUG ===========================
+                    # Copy the dataframe with the relationship PC_DRUG
                     pc_drug_df = self.stat_kg_df[relation].astype(str).copy()
                     pc_drug_df = pc_drug_df[pc_drug_df["DRUG"].isin(self.atc_pre_dict.keys())]
 
-                    # Creazione di un vocabolario unico dai codici UBERON
+                    # Create a unique vocabulary from the codici PHARMACLASS
                     ndc_pc_vocab = pc_drug_df['PHARMACLASS'].unique()
-                    # Creazione di un dizionario che mappa il codice UBERON al suo indice nel vocabolario
+                    # Create a dictionary that maps the codici PHARMACLASS to their index in the vocabulary
                     ndc_pc_dict = {code: i for i, code in enumerate(ndc_pc_vocab)}
 
-                    # Sostituzione dei valori nella colonna 'DRUG' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'DRUG' column with the corresponding indices in the vocabulary
                     pc_drug_df['DRUG'] = pc_drug_df['DRUG'].map(self.atc_pre_dict)
-                    # Sostituzione dei valori nella colonna 'PHARMACLASS' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'PHARMACLASS' column with the corresponding indices in the vocabulary
                     pc_drug_df['PHARMACLASS'] = pc_drug_df['PHARMACLASS'].map(ndc_pc_dict)
 
-                    includes_pharma_id = torch.from_numpy(pc_drug_df['PHARMACLASS'].values)
-                    includes_drug_id = torch.from_numpy(pc_drug_df['DRUG'].values)
-
-                    edge_index_pharma_to_drug = torch.stack([includes_pharma_id, includes_drug_id], dim=0)
-
-                    # print('Dimension of edge index: ' + str(edge_index_pharma_to_drug.shape))
-                    # print("Final edge indices pointing from pharma class to drug:")
-                    # print("=================================================")
-                    # print(edge_index_pharma_to_drug)
+                    if not pc_drug_df.empty:
+                        includes_pharma_id = torch.from_numpy(pc_drug_df['PHARMACLASS'].values)
+                        includes_drug_id = torch.from_numpy(pc_drug_df['DRUG'].values)
+                        edge_index_pharma_to_drug = torch.stack([includes_pharma_id, includes_drug_id], dim=0)
+                    else:
+                        # Initialize edge_index_pharma_to_drug as empty if the DataFrame is empty
+                        edge_index_pharma_to_drug = torch.empty((2, 0), dtype=torch.int64)
 
                 elif relation == "SYMP_DRUG":
                     # =============== MAPPING SYMP_DRUG ===========================
+                    # Copy the dataframe with the relationship SYMP_DRUG
                     symp_drug_df = self.stat_kg_df[relation].astype(str).copy()
                     symp_drug_df = symp_drug_df[symp_drug_df["DRUG"].isin(self.atc_pre_dict.keys())] ###OCCHIO QUI
 
-                    # Sostituzione dei valori nella colonna 'SYMP' con i corrispondenti indici nel vocabolario
+                    # Substituting the values in the 'DRUG' column with the corresponding indices in the vocabulary
                     symp_drug_df['DRUG'] = symp_drug_df['DRUG'].map(self.atc_pre_dict)
 
-                    # Trova l'indice dell'ultimo elemento nel dizionario
+                    # Lookup the indices of the symptoms in the vocabulary
                     last_index = max(self.icd9_symp_dict.values())
 
-                    # Aggiungi i nuovi sintomi al dizionario con indici consecutivi
+                    # Add the new symptoms to the dictionary with consecutive indices
                     for symptom_code in symp_drug_df['SYMP'].unique():
                         if symptom_code not in self.icd9_symp_dict:
                             last_index += 1
@@ -614,13 +579,8 @@ class GNN(BaseModel):
                         causes_drug_id = torch.from_numpy(symp_drug_df['DRUG'].values)
                         edge_index_symptom_to_drug = torch.stack([causes_symp_id, causes_drug_id], dim=0)
                     else:
-                        # Fai qualcosa se il DataFrame è vuoto, ad esempio inizializza edge_index_symptom_to_drug come vuoto
+                        # Initialize edge_index_symptom_to_drug as empty if the DataFrame is empty
                         edge_index_symptom_to_drug = torch.empty((2, 0), dtype=torch.int64)
-
-                    # print('Dimension of edge index: ' + str(edge_index_symptom_to_drug.shape))
-                    # print("Final edge indices pointing from symptom to drug:")
-                    # print("=================================================")
-                    # print(edge_index_symptom_to_drug)
 
         return edge_index_patient_to_visit, edge_index_visit_to_symptom, edge_index_visit_to_disease, \
                 edge_index_visit_to_procedure, edge_index_visit_to_drug, edge_index_disease_to_symptom, \
@@ -685,51 +645,39 @@ class GNN(BaseModel):
         # We can leverage the `T.ToUndirected()` transform for this from PyG:
         graph = T.ToUndirected()(graph)
 
-        # print("=================================================")
-        # print("Final graph:")
-        # print(graph)
-
         return graph
 
     def generate_neg_samples(self) -> HeteroData:
         """
-        Generates negative samples for the graph based on the label key.
+        Generates negative samples for the subgraph based on the label key.
 
         Returns:
             HeteroData: The updated subgraph with negative samples.
         """
         if self.label_key == "drugs":
-            neg_edges = negative_sampling(self.subgraph['visit', 'has_received', 'drug'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes,self.subgraph['drug'].num_nodes))
+            neg_edges = negative_sampling(self.subgraph['visit', 'has_received', 'drug'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['drug'].num_nodes))
             self.subgraph['visit', 'has_received', 'drug'].edge_label_index = self.subgraph['visit', 'has_received', 'drug'].edge_index
             self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.ones(self.subgraph['visit', 'has_received', 'drug'].edge_label_index.shape[1], dtype=torch.float)
             self.subgraph['visit', 'has_received', 'drug'].edge_label_index = torch.cat((self.subgraph['visit', 'has_received', 'drug'].edge_label_index, neg_edges), dim=1)
             self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.cat((self.subgraph['visit', 'has_received', 'drug'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
-
-            # print(self.subgraph['visit', 'has_received', 'drug'].edge_label_index.shape)
-            # print(self.subgraph['visit', 'has_received', 'drug'].edge_label)
         else:
-            neg_edges = negative_sampling(self.subgraph['visit', 'has', 'disease'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes,self.subgraph['drug'].num_nodes))
-
+            neg_edges = negative_sampling(self.subgraph['visit', 'has', 'disease'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['drug'].num_nodes))
             self.subgraph['visit', 'has', 'disease'].edge_label_index = self.subgraph['visit', 'has', 'disease'].edge_index
             self.subgraph['visit', 'has', 'disease'].edge_label = torch.ones(self.subgraph['visit', 'has', 'disease'].edge_label_index.shape[1], dtype=torch.float)
             self.subgraph['visit', 'has', 'disease'].edge_label_index = torch.cat((self.subgraph['visit', 'has', 'disease'].edge_label_index, neg_edges), dim=1)
             self.subgraph['visit', 'has', 'disease'].edge_label = torch.cat((self.subgraph['visit', 'has', 'disease'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
 
-            # print(self.subgraph['visit', 'has', 'disease'].edge_label_index.shape)
-            # print(self.subgraph['visit', 'has', 'disease'].edge_label)
-
         return self.subgraph
 
     def generate_mask(self) -> torch.Tensor:
         """
-        Generates a mask for the graph edges based on the label key.
+        Generates a mask for the subgraph edges based on the label key.
 
         Returns:
             torch.Tensor: The generated mask.
         """
         if self.label_key == "drugs":
             mask = torch.ones_like(self.subgraph['visit', 'has_received', 'drug'].edge_label, dtype=torch.bool, device=self.device)
-            # print(mask)
 
             # Get all possible edges in the graph
             all_possible_edges = torch.cartesian_prod(torch.arange(self.subgraph['visit'].num_nodes), torch.arange(self.label_tokenizer.get_vocabulary_size()))
@@ -744,7 +692,6 @@ class GNN(BaseModel):
             self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.cat([self.subgraph['visit', 'has_received', 'drug'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
         else:
             mask = torch.ones_like(self.subgraph['visit', 'has', 'disease'].edge_label, dtype=torch.bool, device=self.device)
-            # print(mask)
 
             # Get all possible edges in the graph
             all_possible_edges = torch.cartesian_prod(torch.arange(self.subgraph['visit'].num_nodes), torch.arange(self.label_tokenizer.get_vocabulary_size()))
@@ -758,20 +705,8 @@ class GNN(BaseModel):
             self.subgraph['visit', 'has', 'disease'].edge_label_index = torch.cat([self.subgraph['visit', 'has', 'disease'].edge_label_index, missing_edges], dim=1)
             self.subgraph['visit', 'has', 'disease'].edge_label = torch.cat([self.subgraph['visit', 'has', 'disease'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
 
-        # Print missing edges
-        # print("Missing edges in the current graph:")
-        # print(missing_edges.shape)
-
         # Extend the mask with False for missing edges
         mask = torch.cat([mask, torch.zeros(missing_edges.size(1), dtype=torch.bool, device=self.device)], dim=0)
-
-        # Print the mask
-        # print("Extended mask:")
-        # print(mask.shape)
-
-        # Print the number of True and False in the mask
-        # print("Number of True in mask:", torch.sum(mask).item())
-        # print("Number of False in mask:", mask.size(0) - torch.sum(mask).item())
 
         return mask
 
@@ -786,6 +721,8 @@ class GNN(BaseModel):
             - drug_df: DataFrame containing drug data with columns 'SUBJECT_ID', 'HADM_ID', and 'ATC_CODE'.
             - diag_df: DataFrame containing condition data with columns 'SUBJECT_ID', 'HADM_ID', and 'ICD9_CODE'.
         """
+        # ==== DATA CONVERSION ====
+        # SYMPTOMS DataFrame
         symp_df = pd.DataFrame({
             'SUBJECT_ID': self.patient_id,
             'HADM_ID': self.visit_id,
@@ -794,6 +731,7 @@ class GNN(BaseModel):
         symp_df = symp_df.explode('ICD9_CODE')
         symp_df = symp_df.explode('ICD9_CODE')
 
+        # PROCEDURES DataFrame
         proc_df = pd.DataFrame({
             'SUBJECT_ID': self.patient_id,
             'HADM_ID': self.visit_id,
@@ -802,6 +740,7 @@ class GNN(BaseModel):
         proc_df = proc_df.explode('ICD9_CODE')
         proc_df = proc_df.explode('ICD9_CODE')
 
+        # DRUGS DataFrame
         drug_df = pd.DataFrame({
             'SUBJECT_ID': self.patient_id,
             'HADM_ID': self.visit_id,
@@ -810,6 +749,7 @@ class GNN(BaseModel):
         drug_df = drug_df.explode('ATC_CODE')
         drug_df = drug_df.explode('ATC_CODE')
 
+        # CONDITIONS DataFrame
         diag_df = pd.DataFrame({
             'SUBJECT_ID': self.patient_id,
             'HADM_ID': self.visit_id,
@@ -832,19 +772,25 @@ class GNN(BaseModel):
         else:
             edge_label_full = self.subgraph["visit", "has", "disease"].edge_label_index
 
+        # Get the probability values from the model
         prob_full = self.y_prob.detach()
 
+        # Get the unique indices and labels
         unique_visits, indices = torch.unique(edge_label_full[0], return_inverse=True)
         unique_labels, label_indices = torch.unique(edge_label_full[1], return_inverse=True)
 
+        # Sort the indices and labels
         combined_indices = indices * len(unique_labels) + label_indices
         sorted_combined_indices = torch.argsort(combined_indices)
 
+        # Get the unique sorted indices and labels
         unique_combined_indices, unique_indices = torch.unique(sorted_combined_indices, return_inverse=True)
 
+        # Calculate the sorted visits and labels
         sorted_visits = unique_combined_indices // len(unique_labels)
         sorted_labels = unique_combined_indices % len(unique_labels)
 
+        # Create a tensor of zeros with the correct shape
         y_prob_mat = torch.zeros(len(unique_visits), len(unique_labels), device=self.device)
 
         # Indexing directly into the tensor to fill values
@@ -852,7 +798,7 @@ class GNN(BaseModel):
 
         return y_prob_mat
 
-    def visualize_graph(self) -> None:
+    def visualize_graph(self, patients_id: List[int] = 0) -> None:
         """
         Visualizes the graph by drawing its nodes and edges using networkx and matplotlib.
 
@@ -866,10 +812,11 @@ class GNN(BaseModel):
         Returns:
             None
         """
-        select_patient = torch.tensor([0])
-        select_visit = torch.tensor([0])
+        # Select a specific patient and visit
+        select_patient = torch.tensor(patients_id)
 
-        data_view = self.graph.subgraph({"patient": select_patient, "visit": select_visit})
+        # Retrieve the subgraph
+        data_view = self.graph.subgraph({"patient": select_patient})
         data_view = T.RemoveIsolatedNodes()(data_view)
 
         # Mapping between node_type values and labels
@@ -885,9 +832,9 @@ class GNN(BaseModel):
         # Convert to homogeneous
         data_homogeneous = data_view.to_homogeneous()
         g = to_networkx(data_homogeneous)
+
         # Use node types as color map
         colour_map = data_homogeneous.node_type
-
         pos = nx.spring_layout(g)
 
         # Separate nodes by node type and add some randomness to separate the nodes
@@ -911,22 +858,34 @@ class GNN(BaseModel):
 
     def get_subgraph(self) -> HeteroData:
         """
-        Returns a subgraph containing selected patients and visits based on the provided data.
+        Returns a subgraph containing selected patients, visits, symptoms, procedures and diseases.
 
         Returns:
             subgraph (HeteroData): A subgraph containing selected patients and visits.
         """
+        # ==== DATA SELECTION ====
+        # Select the patients, visits, symptoms, procedures and diseases from the graph
         self.symp_df['SUBJECT_ID'] = self.symp_df['SUBJECT_ID'].map(self.subject_dict)
         patient = self.symp_df["SUBJECT_ID"].unique()
-
         select_patient = torch.from_numpy(patient)
-
+ 
         self.symp_df['HADM_ID'] = self.symp_df['HADM_ID'].map(self.hadm_dict)
         visit = self.symp_df["HADM_ID"].unique()
-
         select_visit = torch.from_numpy(visit)
-
-        subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit})
+ 
+        self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
+        symptom = self.symp_df["ICD9_CODE"].unique()
+        select_symptom = torch.from_numpy(symptom)
+ 
+        self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
+        disease = self.diag_df["ICD9_CODE"].unique()
+        select_disease = torch.from_numpy(disease)
+ 
+        self.proc_df['ICD9_CODE'] = self.proc_df['ICD9_CODE'].map(self.icd9_proc_dict)
+        procedure = self.proc_df["ICD9_CODE"].unique()
+        select_procedure = torch.from_numpy(procedure)
+ 
+        subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "disease": select_disease})
 
         return subgraph
 
@@ -940,7 +899,21 @@ class GNN(BaseModel):
         drugs: List[List[str]],
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
+        """
+        Forward pass of the model.
 
+        Args:
+            patient_id (List[str]): List of patient IDs.
+            visit_id (List[str]): List of visit IDs.
+            conditions (List[List[List[str]]]): List of conditions.
+            procedures (List[List[List[str]]]): List of procedures.
+            symptoms (List[List[List[str]]]): List of symptoms.
+            drugs (List[List[str]]): List of drugs.
+
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing the loss, predicted probabilities, and true labels.
+        """
+        # Set the model to training mode
         self.patient_id = patient_id
         self.visit_id = visit_id
         self.conditions = conditions
@@ -948,20 +921,27 @@ class GNN(BaseModel):
         self.symptoms = symptoms
         self.drugs = drugs
 
+        # Prepare the labels
         if self.label_key == "drugs":
             y_true = self.prepare_labels(self.drugs, self.label_tokenizer)
         else:
             y_true = self.prepare_labels(self.conditions, self.label_tokenizer)
 
+        # Convert the data into separate dataframes for procedures, symptoms, drugs, and conditions
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.convert_batches()
+        # Get the subgraph
         self.subgraph = self.get_subgraph()
         self.subgraph = self.generate_neg_samples()
         self.mask = self.generate_mask()
 
         self.subgraph = self.subgraph.to(device=self.device)
 
+        # Get the loss and predicted probabilities
         loss, pred = self.layer(self.subgraph, self.mask)
+
+        # Prepare the predicted probabilities applying the sigmoid function
         self.y_prob = self.prepare_y_prob(pred)
+        # Create the probability matrix
         y_prob_mat = self.create_y_prob_mat()
 
         loss = loss.to(device=self.device)
