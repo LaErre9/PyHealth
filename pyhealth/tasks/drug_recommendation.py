@@ -50,8 +50,8 @@ def drug_recommendation_mimic3_fn(patient: Patient):
         drugs = visit.get_code_list(table="PRESCRIPTIONS")
         symptoms = visit.get_code_list(table='NOTEEVENTS_ICD')
 
-        # ATC 3 level
-        drugs = [drug[:4] for drug in drugs]
+        # ATC 4 level
+        drugs = [drug[:5] for drug in drugs]
         # exclude: visits without condition, procedure, or drug code
         if len(conditions) * len(procedures) * len(drugs) * len(symptoms) == 0:
             continue
