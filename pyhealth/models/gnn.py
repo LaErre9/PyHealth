@@ -29,23 +29,20 @@ def compute_class_weights(y_true):
 
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
-    def __init__(self, hidden_channels, dropout=0.2):
+    def __init__(self, hidden_channels, dropout=0.4):
         super().__init__()
 
         self.conv1 = SAGEConv((-1, -1), hidden_channels)
+        self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
         self.conv2 = SAGEConv((-1, -1), hidden_channels)
-        self.conv3 = SAGEConv((-1, -1), hidden_channels)
-        self.conv4 = SAGEConv((-1, -1), hidden_channels)
+        self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(x, edge_index).relu()
-        x = self.dropout(x)
-        x = self.conv2(x, edge_index).relu()
-        x = self.dropout(x)
-        x = self.conv3(x, edge_index).relu()
-        x = self.dropout(x)
-        x = self.conv4(x, edge_index)
+        x = F.leaky_relu(self.conv1(x, edge_index))
+        x = self.bn1(x)
+        x = F.leaky_relu(self.conv2(x, edge_index))
+        x = self.bn2(x)
         x = self.dropout(x)
 
         return x
