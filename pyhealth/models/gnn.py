@@ -27,6 +27,48 @@ def compute_class_weights(y_true):
     class_weights = total_samples / (len(class_counts) * class_counts.float())
     return class_weights
 
+
+class X_Dict(torch.nn.Module):
+  def __init__(self, k: int, static_kg: List[str], data: HeteroData, embedding_dim):
+    super().__init__()
+
+    self.k = k
+    self.static_kg = static_kg
+
+    self.pat_emb = torch.nn.Embedding(data["patient"].num_nodes, embedding_dim)
+    self.vis_emb = torch.nn.Embedding(data["visit"].num_nodes, embedding_dim)
+    self.symp_emb = torch.nn.Embedding(data["symptom"].num_nodes, embedding_dim)
+    self.proc_emb = torch.nn.Embedding(data["procedure"].num_nodes, embedding_dim)
+    self.dis_emb = torch.nn.Embedding(data["disease"].num_nodes, embedding_dim)
+    self.drug_emb = torch.nn.Embedding(data["drug"].num_nodes, embedding_dim)
+
+    # Embedding of nodes of Static KG
+    if self.k == 2:
+        for relation in self.static_kg:
+            if relation == "ANAT_DIAG":
+                self.anat_emb = torch.nn.Embedding(data["anatomy"].num_nodes, embedding_dim)
+            if relation == "PC_DRUG":
+                self.pharma_emb = torch.nn.Embedding(data["pharmaclass"].num_nodes, embedding_dim)
+
+  def forward(self, batch: HeteroData) -> Dict[str, torch.Tensor]:
+    x_dict = {
+        'patient': self.pat_emb(batch['patient']['node_id']),
+        'visit': self.vis_emb(batch['visit']['node_id']),
+        'symptom': self.symp_emb(batch['symptom']['node_id']),
+        'procedure': self.proc_emb(batch['procedure']['node_id']),
+        'disease': self.dis_emb(batch['disease']['node_id']),
+        'drug': self.drug_emb(batch['drug']['node_id']),
+    }
+
+    if self.k == 2:
+        for relation in self.static_kg:
+            if relation == "ANAT_DIAG":
+                x_dict['anatomy'] = self.anat_emb(batch['anatomy']['node_id'])
+            if relation == "PC_DRUG":
+                x_dict['pharmaclass'] = self.pharma_emb(batch['pharmaclass']['node_id'])
+
+    return x_dict
+
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
     def __init__(self, hidden_channels, dropout=0.4):
@@ -36,6 +78,10 @@ class GNN_Conv(torch.nn.Module):
         self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
         self.conv2 = SAGEConv((-1, -1), hidden_channels)
         self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
+        self.conv3 = SAGEConv((-1, -1), hidden_channels)
+        self.bn3 = torch.nn.BatchNorm1d(hidden_channels)
+        self.conv4 = SAGEConv((-1, -1), hidden_channels)
+        self.bn4 = torch.nn.BatchNorm1d(hidden_channels)
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
@@ -43,6 +89,10 @@ class GNN_Conv(torch.nn.Module):
         x = self.bn1(x)
         x = F.leaky_relu(self.conv2(x, edge_index))
         x = self.bn2(x)
+        x = F.leaky_relu(self.conv3(x, edge_index))
+        x = self.bn3(x)
+        x = F.leaky_relu(self.conv4(x, edge_index))
+        x = self.bn4(x)
         x = self.dropout(x)
 
         return x
@@ -94,20 +144,21 @@ class GNNLayer(torch.nn.Module):
 
         # Since the dataset does not come with rich features, we also learn four
         # embedding matrices for patients, symptoms, procedures and diseases:
-        self.pat_emb = torch.nn.Embedding(data["patient"].num_nodes, embedding_dim)
-        self.vis_emb = torch.nn.Embedding(data["visit"].num_nodes, embedding_dim)
-        self.symp_emb = torch.nn.Embedding(data["symptom"].num_nodes, embedding_dim)
-        self.proc_emb = torch.nn.Embedding(data["procedure"].num_nodes, embedding_dim)
-        self.dis_emb = torch.nn.Embedding(data["disease"].num_nodes, embedding_dim)
-        self.drug_emb = torch.nn.Embedding(data["drug"].num_nodes, embedding_dim)
+        # self.pat_emb = torch.nn.Embedding(data["patient"].num_nodes, embedding_dim)
+        # self.vis_emb = torch.nn.Embedding(data["visit"].num_nodes, embedding_dim)
+        # self.symp_emb = torch.nn.Embedding(data["symptom"].num_nodes, embedding_dim)
+        # self.proc_emb = torch.nn.Embedding(data["procedure"].num_nodes, embedding_dim)
+        # self.dis_emb = torch.nn.Embedding(data["disease"].num_nodes, embedding_dim)
+        # self.drug_emb = torch.nn.Embedding(data["drug"].num_nodes, embedding_dim)
 
-        # Embedding of nodes of Static KG
-        if self.k == 2:
-            for relation in self.static_kg:
-                if relation == "ANAT_DIAG":
-                    self.anat_emb = torch.nn.Embedding(data["anatomy"].num_nodes, embedding_dim)
-                if relation == "PC_DRUG":
-                    self.pharma_emb = torch.nn.Embedding(data["pharmaclass"].num_nodes, embedding_dim)
+        # # Embedding of nodes of Static KG
+        # if self.k == 2:
+        #     for relation in self.static_kg:
+        #         if relation == "ANAT_DIAG":
+        #             self.anat_emb = torch.nn.Embedding(data["anatomy"].num_nodes, embedding_dim)
+        #         if relation == "PC_DRUG":
+        #             self.pharma_emb = torch.nn.Embedding(data["pharmaclass"].num_nodes, embedding_dim)
+        # self.x_dict = X_Dict(data, hidden_channels)
 
         # Instantiate homogeneous GNN:
         self.gnn = GNN_Conv(hidden_channels)
@@ -117,58 +168,45 @@ class GNNLayer(torch.nn.Module):
 
         self.classifier = Classifier(hidden_channels)
 
-    def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        """Calculates the loss."""
-        # # Calculate class weights
-        # class_weights = compute_class_weights(y_true)
- 
-        # # Create a tensor of weights for each datapoint
-        class_weights = torch.tensor([0.5, 1])
-        sample_weights = class_weights[y_true.long()]
- 
-        # Calculate the loss for each prediction
-        loss = F.binary_cross_entropy_with_logits(pred, y_true, weight=sample_weights)
+    def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[str, torch.Tensor], 
+                edge_label_index: torch.Tensor, edge_label: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        # x_dict = {
+        #     "patient": self.pat_emb(data["patient"].node_id),
+        #     "visit": self.vis_emb(data["visit"].node_id),
+        #     "symptom": self.symp_emb(data["symptom"].node_id),
+        #     "procedure": self.proc_emb(data["procedure"].node_id),
+        #     "disease": self.dis_emb(data["disease"].node_id),
+        #     "drug": self.drug_emb(data["drug"].node_id),
+        # }
 
-        return loss
-
-    def forward(self, data: HeteroData, mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        x_dict = {
-            "patient": self.pat_emb(data["patient"].node_id),
-            "visit": self.vis_emb(data["visit"].node_id),
-            "symptom": self.symp_emb(data["symptom"].node_id),
-            "procedure": self.proc_emb(data["procedure"].node_id),
-            "disease": self.dis_emb(data["disease"].node_id),
-            "drug": self.drug_emb(data["drug"].node_id),
-        }
-
-        # Get embeddings of nodes of Static KG
-        if self.k == 2:
-            for relation in self.static_kg:
-                if relation == "ANAT_DIAG":
-                    x_dict["anatomy"] = self.anat_emb(data["anatomy"].node_id)
-                if relation == "PC_DRUG":
-                    x_dict["pharmaclass"] = self.pharma_emb(data["pharmaclass"].node_id)
+        # # Get embeddings of nodes of Static KG
+        # if self.k == 2:
+        #     for relation in self.static_kg:
+        #         if relation == "ANAT_DIAG":
+        #             x_dict["anatomy"] = self.anat_emb(data["anatomy"].node_id)
+        #         if relation == "PC_DRUG":
+        #             x_dict["pharmaclass"] = self.pharma_emb(data["pharmaclass"].node_id)
 
         # `x_dict` holds feature matrices of all node types
         # `edge_index_dict` holds all edge indices of all edge types
-        x_dict = self.gnn(x_dict, data.edge_index_dict)
+        z_dict = self.gnn(x_dict, edge_index_dict)
 
         if self.label_key == "drugs":
             pred = self.classifier(
-                x_dict["visit"],
-                x_dict["drug"],
-                data["visit", "has_received", "drug"].edge_label_index,
+                z_dict["visit"],
+                z_dict["drug"],
+                edge_label_index,
             )
-            loss = self.calculate_loss(pred, data["visit", "has_received", "drug"].edge_label, mask)
+            # loss = self.calculate_loss(pred, edge_label, mask)
         else:
             pred = self.classifier(
-                x_dict["visit"],
-                x_dict["disease"],
-                data["visit", "has", "disease"].edge_label_index,
+                z_dict["visit"],
+                z_dict["disease"],
+                edge_label_index,
             )
-            loss = self.calculate_loss(pred, data["visit", "has", "disease"].edge_label, mask)
+            # loss = self.calculate_loss(pred, edge_label, mask)
 
-        return loss, pred
+        return F.sigmoid(pred)
 
 class GNN(BaseModel):
     """GNN Model.
@@ -235,6 +273,8 @@ class GNN(BaseModel):
         self.graph = self.graph_definition()
 
         # self.visualize_graph()
+
+        self.x_dict = X_Dict(self.k, self.static_kg, self.graph, self.embedding_dim)
 
         self.layer = GNNLayer(self.graph, self.label_key, self.static_kg, self.k, self.hidden_channels, self.embedding_dim)
 
@@ -886,6 +926,20 @@ class GNN(BaseModel):
 
         return subgraph
 
+    def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        """Calculates the loss."""
+        # # Calculate class weights
+        # class_weights = compute_class_weights(y_true)
+ 
+        # # Create a tensor of weights for each datapoint
+        class_weights = torch.tensor([0.6, 0.9])
+        sample_weights = class_weights[y_true.long()]
+ 
+        # Calculate the loss for each prediction
+        loss = F.binary_cross_entropy(pred, y_true, weight=sample_weights)
+
+        return loss
+
     def forward(
         self,
         patient_id: List[str],
@@ -933,14 +987,19 @@ class GNN(BaseModel):
 
         self.subgraph = self.subgraph.to(device=self.device)
 
+        self.node_features = self.x_dict(self.subgraph)
+
         # Get the loss and predicted probabilities
-        loss, pred = self.layer(self.subgraph, self.mask)
+        pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
+                            self.subgraph['visit', 'drug'].edge_label_index, 
+                            self.subgraph['visit', 'drug'].edge_label, self.mask)
 
         # Prepare the predicted probabilities applying the sigmoid function
         self.y_prob = self.prepare_y_prob(pred)
         # Create the probability matrix
         y_prob_mat = self.create_y_prob_mat()
 
+        loss = self.calculate_loss(pred, self.subgraph['visit', 'drug'].edge_label, self.mask)
         loss = loss.to(device=self.device)
         y_prob_mat = y_prob_mat.to(device=self.device)
         y_true = y_true.to(device=self.device)
