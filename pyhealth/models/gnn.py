@@ -27,7 +27,8 @@ def compute_class_weights(y_true):
     class_weights = total_samples / (len(class_counts) * class_counts.float())
     return class_weights
 
-
+# Since the dataset does not come with rich features, we also learn four
+# embedding matrices for patients, symptoms, procedures and diseases:
 class X_Dict(torch.nn.Module):
   def __init__(self, k: int, static_kg: List[str], data: HeteroData, embedding_dim):
     super().__init__()
@@ -142,24 +143,6 @@ class GNNLayer(torch.nn.Module):
         self.static_kg = static_kg
         self.k = k
 
-        # Since the dataset does not come with rich features, we also learn four
-        # embedding matrices for patients, symptoms, procedures and diseases:
-        # self.pat_emb = torch.nn.Embedding(data["patient"].num_nodes, embedding_dim)
-        # self.vis_emb = torch.nn.Embedding(data["visit"].num_nodes, embedding_dim)
-        # self.symp_emb = torch.nn.Embedding(data["symptom"].num_nodes, embedding_dim)
-        # self.proc_emb = torch.nn.Embedding(data["procedure"].num_nodes, embedding_dim)
-        # self.dis_emb = torch.nn.Embedding(data["disease"].num_nodes, embedding_dim)
-        # self.drug_emb = torch.nn.Embedding(data["drug"].num_nodes, embedding_dim)
-
-        # # Embedding of nodes of Static KG
-        # if self.k == 2:
-        #     for relation in self.static_kg:
-        #         if relation == "ANAT_DIAG":
-        #             self.anat_emb = torch.nn.Embedding(data["anatomy"].num_nodes, embedding_dim)
-        #         if relation == "PC_DRUG":
-        #             self.pharma_emb = torch.nn.Embedding(data["pharmaclass"].num_nodes, embedding_dim)
-        # self.x_dict = X_Dict(data, hidden_channels)
-
         # Instantiate homogeneous GNN:
         self.gnn = GNN_Conv(hidden_channels)
 
@@ -170,25 +153,7 @@ class GNNLayer(torch.nn.Module):
 
     def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[str, torch.Tensor], 
                 edge_label_index: torch.Tensor, edge_label: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
-        # x_dict = {
-        #     "patient": self.pat_emb(data["patient"].node_id),
-        #     "visit": self.vis_emb(data["visit"].node_id),
-        #     "symptom": self.symp_emb(data["symptom"].node_id),
-        #     "procedure": self.proc_emb(data["procedure"].node_id),
-        #     "disease": self.dis_emb(data["disease"].node_id),
-        #     "drug": self.drug_emb(data["drug"].node_id),
-        # }
 
-        # # Get embeddings of nodes of Static KG
-        # if self.k == 2:
-        #     for relation in self.static_kg:
-        #         if relation == "ANAT_DIAG":
-        #             x_dict["anatomy"] = self.anat_emb(data["anatomy"].node_id)
-        #         if relation == "PC_DRUG":
-        #             x_dict["pharmaclass"] = self.pharma_emb(data["pharmaclass"].node_id)
-
-        # `x_dict` holds feature matrices of all node types
-        # `edge_index_dict` holds all edge indices of all edge types
         z_dict = self.gnn(x_dict, edge_index_dict)
 
         if self.label_key == "drugs":
@@ -197,14 +162,12 @@ class GNNLayer(torch.nn.Module):
                 z_dict["drug"],
                 edge_label_index,
             )
-            # loss = self.calculate_loss(pred, edge_label, mask)
         else:
             pred = self.classifier(
                 z_dict["visit"],
                 z_dict["disease"],
                 edge_label_index,
             )
-            # loss = self.calculate_loss(pred, edge_label, mask)
 
         return F.sigmoid(pred)
 
@@ -271,8 +234,6 @@ class GNN(BaseModel):
             self.edge_index_pharma_to_drug, self.edge_index_symptom_to_drug = self.get_edge_index()
 
         self.graph = self.graph_definition()
-
-        # self.visualize_graph()
 
         self.x_dict = X_Dict(self.k, self.static_kg, self.graph, self.embedding_dim)
 
@@ -797,6 +758,39 @@ class GNN(BaseModel):
 
         return proc_df, symp_df, drug_df, diag_df
 
+    def get_subgraph(self) -> HeteroData:
+        """
+        Returns a subgraph containing selected patients, visits, symptoms, procedures and diseases.
+
+        Returns:
+            subgraph (HeteroData): A subgraph containing selected patients and visits.
+        """
+        # ==== DATA SELECTION ====
+        # Select the patients, visits, symptoms, procedures and diseases from the graph
+        self.symp_df['SUBJECT_ID'] = self.symp_df['SUBJECT_ID'].map(self.subject_dict)
+        patient = self.symp_df["SUBJECT_ID"].unique()
+        select_patient = torch.from_numpy(patient)
+ 
+        self.symp_df['HADM_ID'] = self.symp_df['HADM_ID'].map(self.hadm_dict)
+        visit = self.symp_df["HADM_ID"].unique()
+        select_visit = torch.from_numpy(visit)
+ 
+        self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
+        symptom = self.symp_df["ICD9_CODE"].unique()
+        select_symptom = torch.from_numpy(symptom)
+ 
+        self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
+        disease = self.diag_df["ICD9_CODE"].unique()
+        select_disease = torch.from_numpy(disease)
+ 
+        self.proc_df['ICD9_CODE'] = self.proc_df['ICD9_CODE'].map(self.icd9_proc_dict)
+        procedure = self.proc_df["ICD9_CODE"].unique()
+        select_procedure = torch.from_numpy(procedure)
+ 
+        subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "disease": select_disease})
+
+        return subgraph
+
     def create_y_prob_mat(self) -> torch.Tensor:
         """
         Create a probability matrix based on the given label key.
@@ -893,39 +887,6 @@ class GNN(BaseModel):
         plt.legend(handles=legend_handles, loc="lower right")
         plt.show()
 
-    def get_subgraph(self) -> HeteroData:
-        """
-        Returns a subgraph containing selected patients, visits, symptoms, procedures and diseases.
-
-        Returns:
-            subgraph (HeteroData): A subgraph containing selected patients and visits.
-        """
-        # ==== DATA SELECTION ====
-        # Select the patients, visits, symptoms, procedures and diseases from the graph
-        self.symp_df['SUBJECT_ID'] = self.symp_df['SUBJECT_ID'].map(self.subject_dict)
-        patient = self.symp_df["SUBJECT_ID"].unique()
-        select_patient = torch.from_numpy(patient)
- 
-        self.symp_df['HADM_ID'] = self.symp_df['HADM_ID'].map(self.hadm_dict)
-        visit = self.symp_df["HADM_ID"].unique()
-        select_visit = torch.from_numpy(visit)
- 
-        self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
-        symptom = self.symp_df["ICD9_CODE"].unique()
-        select_symptom = torch.from_numpy(symptom)
- 
-        self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
-        disease = self.diag_df["ICD9_CODE"].unique()
-        select_disease = torch.from_numpy(disease)
- 
-        self.proc_df['ICD9_CODE'] = self.proc_df['ICD9_CODE'].map(self.icd9_proc_dict)
-        procedure = self.proc_df["ICD9_CODE"].unique()
-        select_procedure = torch.from_numpy(procedure)
- 
-        subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "disease": select_disease})
-
-        return subgraph
-
     def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
         # # Calculate class weights
@@ -980,6 +941,7 @@ class GNN(BaseModel):
 
         # Convert the data into separate dataframes for procedures, symptoms, drugs, and conditions
         self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.convert_batches()
+        
         # Get the subgraph
         self.subgraph = self.get_subgraph()
         self.subgraph = self.generate_neg_samples()
@@ -990,16 +952,22 @@ class GNN(BaseModel):
         self.node_features = self.x_dict(self.subgraph)
 
         # Get the loss and predicted probabilities
-        pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
-                            self.subgraph['visit', 'drug'].edge_label_index, 
-                            self.subgraph['visit', 'drug'].edge_label, self.mask)
+        if self.label_key == "drugs":
+            pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
+                                self.subgraph['visit', 'drug'].edge_label_index, 
+                                self.subgraph['visit', 'drug'].edge_label, self.mask)
+            loss = self.calculate_loss(pred, self.subgraph['visit', 'drug'].edge_label, self.mask)
+        else:
+            pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
+                                self.subgraph['visit', 'disease'].edge_label_index, 
+                                self.subgraph['visit', 'disease'].edge_label, self.mask)
+            loss = self.calculate_loss(pred, self.subgraph['visit', 'disease'].edge_label, self.mask)
 
         # Prepare the predicted probabilities applying the sigmoid function
-        self.y_prob = self.prepare_y_prob(pred)
+        self.y_prob = pred
         # Create the probability matrix
         y_prob_mat = self.create_y_prob_mat()
 
-        loss = self.calculate_loss(pred, self.subgraph['visit', 'drug'].edge_label, self.mask)
         loss = loss.to(device=self.device)
         y_prob_mat = y_prob_mat.to(device=self.device)
         y_true = y_true.to(device=self.device)
