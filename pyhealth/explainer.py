@@ -1,55 +1,197 @@
 import os
-import random
 import torch
+import datetime
+import webbrowser
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-import networkx as nx
-from typing import Dict, List, Tuple, Union
-
-import torch.nn.functional as F
-from torch.nn import Linear
-
-from torch_geometric.utils import to_networkx
-from torch_geometric.utils import negative_sampling
-from torch_geometric.data import HeteroData
-import torch_geometric.transforms as T
-from torch_geometric.nn import SAGEConv, to_hetero
-
-from pyhealth.models import BaseModel
-from pyhealth.datasets import SampleEHRDataset
-
-from torch_geometric.explain import CaptumExplainer, Explainer
-
 from pyvis.network import Network
 from pylab import rcParams
-import webbrowser
+import networkx as nx
+from typing import Dict, List, Tuple, Union, Optional
 
-from torch import Tensor
-from torch_geometric.explain import Explainer, HeteroExplanation, Explanation
-from torch_geometric.explain.config import ExplanationType, ModelMode
-from torch_geometric.explain.metric import characterization_score
+from torch.nn import functional as F
+from torch_geometric.utils import negative_sampling
+from torch_geometric.data import HeteroData
+from torch_geometric.explain import CaptumExplainer, Explainer, Explanation
+from torch_geometric.explain.config import ExplanationType, ModelMode, MaskType, ModelReturnType
+from torch_geometric.explain.metric import characterization_score, fidelity_curve_auc
+
+from pyhealth.models import GNN
+from pyhealth.datasets import SampleEHRDataset
+from pyhealth.medcode import InnerMap
+
+# Save current date and time
+current_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+
+def fidelity(
+        explainer: Explainer,
+        explanation: Explanation,
+        subgraph: HeteroData,
+        node_features: Dict[str, torch.Tensor],
+        mask: torch.Tensor,
+) -> Tuple[float, float]:
+        # Verifica se il modello è di tipo regression
+        if explainer.model_config.mode == ModelMode.regression:
+            raise ValueError("Fidelity not defined for 'regression' models")
+
+        # Estrai node_mask e edge_mask da HeteroExplanation
+        node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
+        edge_mask_dict = {k: explanation[k].edge_mask for k in explanation.edge_types}
+
+        kwargs = {}
+        if isinstance(explanation, Explanation):
+            kwargs = {key: explanation[key] for key in explanation._model_args}
+        else:
+            kwargs = {
+                'edge_label_index': subgraph['visit', 'drug'].edge_label_index,
+                'edge_label': subgraph['visit', 'drug'].edge_label,
+                'mask': mask,
+            }
+
+        y = explanation.target
+        if explainer.explanation_type == ExplanationType.phenomenon:
+            y_hat = explainer.get_prediction(
+                node_features,
+                subgraph.edge_index_dict,
+                **kwargs,
+            )
+            y_hat = explainer.get_target(y_hat)
+
+        explain_y_hat = explainer.get_masked_prediction(
+            node_features,
+            subgraph.edge_index_dict,
+            node_mask_dict,
+            edge_mask_dict,
+            **kwargs,
+        )
+        # print('explain_y_hat: ' + str(explain_y_hat))
+        explain_y_hat = explainer.get_target(explain_y_hat)
+
+        # print('explain_y_hat: ' + str(explain_y_hat.shape))
+
+        # print('Before node mask: ' + str(node_mask_dict))
+        # print('Before edge mask: ' + str(edge_mask_dict))
+
+        for key in node_mask_dict.keys():
+            node_mask_dict[key] = 1. - node_mask_dict[key]
+
+        for key in edge_mask_dict.keys():
+            edge_mask_dict[key] = 1. - edge_mask_dict[key]
+
+        # print('After node mask: ' + str(node_mask_dict))
+        # print('After edge mask: ' + str(edge_mask_dict))
+
+        complement_y_hat = explainer.get_masked_prediction(
+            node_features,
+            subgraph.edge_index_dict,
+            node_mask_dict,
+            edge_mask_dict,
+            **kwargs,
+        )
+        # print('complement_y_hat: ' + str(complement_y_hat))
+        complement_y_hat = explainer.get_target(complement_y_hat)
+
+        # print('complement_y_hat: ' + str(complement_y_hat.shape))
+        
+        y = subgraph['visit', 'drug'].edge_label
+
+        if explanation.get('index') is not None:
+            if explainer.explanation_type == ExplanationType.phenomenon:
+                y_hat = y_hat[explanation.index]
+            explain_y_hat = explain_y_hat[explanation.index]
+            complement_y_hat = complement_y_hat[explanation.index]
+
+        # print('complement_y_hat: ' + str(complement_y_hat))
+        # print('explain_y_hat: ' + str(explain_y_hat))
+        # print('y: ' + str(y))
+
+        if explainer.explanation_type == ExplanationType.model:
+            pos_fidelity = 1. - (complement_y_hat == y).float().mean()
+            neg_fidelity = 1. - (explain_y_hat == y).float().mean()
+        else:
+            pos_fidelity = ((y_hat == y).float() -
+                            (complement_y_hat == y).float()).abs().mean()
+            neg_fidelity = ((y_hat == y).float() -
+                            (explain_y_hat == y).float()).abs().mean()
+
+        return pos_fidelity, neg_fidelity
+
+def unfaithfulness(
+        explainer: Explainer,
+        explanation: Explanation,
+        subgraph: HeteroData,
+        node_features: Dict[str, torch.Tensor],
+        mask: torch.Tensor,
+        top_k: Optional[int] = None,
+) -> float:
+    if explainer.model_config.mode == ModelMode.regression:
+        raise ValueError("Fidelity not defined for 'regression' models")
+
+    if top_k is not None and explainer.node_mask_type == MaskType.object:
+        raise ValueError("Cannot apply top-k feature selection based on a "
+                         "node mask of type 'object'")
+
+    # Estrai node_mask e edge_mask da HeteroExplanation
+    node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
+    edge_mask_dict = {k: explanation[k].edge_mask for k in explanation.edge_types}
+    x, edge_index = node_features, subgraph.edge_index_dict
+    
+    kwargs = {}
+    if isinstance(explanation, Explanation):
+        kwargs = {key: explanation[key] for key in explanation._model_args}
+    else:
+        kwargs = {
+            'edge_label_index': subgraph['visit', 'drug'].edge_label_index,
+            'edge_label': subgraph['visit', 'drug'].edge_label,
+            'mask': mask,
+        }
+
+    y = subgraph['visit', 'drug'].edge_label
+    # print('y: ' + str(y))
+    if y is None:  # == ExplanationType.phenomenon
+        y = explainer.get_prediction(x, edge_index, **kwargs)
+
+    feat_importance = {}
+    if node_mask_dict is not None and top_k is not None:
+        for key in node_mask_dict.keys():
+            feat_importance[key] = node_mask_dict[key].sum(dim=0)
+            _, top_k_index = feat_importance[key].topk(top_k)
+            node_mask_dict[key] = torch.zeros_like(node_mask_dict[key])
+            node_mask_dict[key][:, top_k_index] = 1.0
+
+    y_hat = explainer.get_masked_prediction(x, edge_index, node_mask_dict,
+                                            edge_mask_dict, **kwargs)
+    y_hat = y_hat.softmax(dim=-1)
+    y = y.softmax(dim=-1)
+    # print('y_hat: ' + str(y_hat))
+
+    if explanation.get('index') is not None:
+        y, y_hat = y[explanation.index], y_hat[explanation.index]
+
+    if explainer.model_config.return_type == ModelReturnType.raw:
+        y, y_hat = y.softmax(dim=-1), y_hat.softmax(dim=-1)
+    elif explainer.model_config.return_type == ModelReturnType.log_probs:
+        y, y_hat = y.exp(), y_hat.exp()
+
+    kl_div = F.kl_div(y.log(), y_hat, reduction='batchmean')
+    # print('kl_div: ' + str(kl_div))
+    return 1 - float(torch.exp(-kl_div))
 
 class HeteroGraphExplainer():
     def __init__(
         self,
         dataset: SampleEHRDataset,
-        model: BaseModel,
+        model: GNN,
         label_key: str,
         k: int,
-
     ):
-        # super(HeteroGraphExplainer, self).__init__(
-        #     dataset=dataset,
-        #     label_key=label_key,
-        # )
-
         self.dataset = dataset
         self.model = model
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.label_key = label_key
-        self.label_tokenizer = self.model.get_label_tokenizer()
         self.k = k
+
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.label_tokenizer = self.model.get_label_tokenizer()
         
         self.proc_df, self.symp_df, self.drug_df, self.diag_df, self.stat_kg_df = self.get_dataframe()
 
@@ -70,36 +212,26 @@ class HeteroGraphExplainer():
 
         self.node_features = self.model.x_dict(self.subgraph)
 
-        # self.edge_index_patient_to_visit, self.edge_index_visit_to_symptom, \
-        #     self.edge_index_visit_to_disease, self.edge_index_visit_to_procedure, \
-        #     self.edge_index_visit_to_drug, self.edge_index_disease_to_symptom, \
-        #     self.edge_index_anatomy_to_diagnosis, self.edge_index_diagnosis_to_drug, \
-        #     self.edge_index_pharma_to_drug, self.edge_index_symptom_to_drug = self.get_edge_index()
-
-        # self.graph = self.graph_definition()
-        # self.x_dict = self.model.x_dict
         self.explainer = Explainer(
-                    model=self.model.layer,
-                    algorithm=CaptumExplainer('IntegratedGradients',
-                                               n_steps=300,
-                                               method='riemann_trapezoid',
-                                               internal_batch_size=self.subgraph['visit', 'drug'].edge_index.shape[1]), # HYPERPARAMETERS
-                    explanation_type='model',
-                    model_config=dict(
-                        mode='binary_classification',
-                        task_level='edge',
-                        return_type='probs',
-                    ),
-                    node_mask_type='attributes',
-                    edge_mask_type='object',
-                    threshold_config=dict(
-                        threshold_type='topk',
-                        value=3,
-                    ),
-                )
-        
-        
-
+            model=self.model.layer,
+            # HYPERPARAMETERS
+            algorithm=CaptumExplainer('IntegratedGradients',
+                                        n_steps=500,
+                                        method='riemann_trapezoid'
+                                      ),
+            explanation_type='model',
+            model_config=dict(
+                mode='binary_classification',
+                task_level='edge',
+                return_type='probs',
+            ),
+            node_mask_type='attributes',
+            edge_mask_type='object',
+            threshold_config=dict(
+                threshold_type='topk',
+                value=10,
+            )
+        )
 
     def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Union[None, Dict[str, pd.DataFrame]]]:
         """Gets the dataframe of conditions, procedures, symptoms and drugs of patients.
@@ -271,22 +403,24 @@ class HeteroGraphExplainer():
     def explain(
         self,
         n: int
-    ):            
-        
+    ):
+
         self.n = n
         self.explanation =self.explainer(
             x = self.node_features,
             edge_index = self.subgraph.edge_index_dict,
-            # target = test_data['patient', 'disease'].edge_label[n].unsqueeze(dim=0).long(),
             edge_label_index = self.subgraph['visit', 'drug'].edge_label_index[:, self.n],
             edge_label = self.subgraph['visit', 'drug'].edge_label[self.n],
             mask = self.mask
         )
         print(f'Generated explanations in {self.explanation.available_explanations}')
 
-        path = 'feature_importance1.png'
+        path = f'./explainability_results/feature_importance_{current_datetime}.png'
+
         self.explanation.detach()
         self.explanation.visualize_feature_importance(path, top_k=10)
+        self.explanation['prediction'] = F.sigmoid(self.explanation['prediction'])
+
         print(f"Feature importance plot has been saved to '{path}'")
         print('Edge to predict: ' + str(self.subgraph['visit', 'drug'].edge_label_index[:, n]))
         print('Label to predict: ' + str(self.subgraph['visit', 'drug'].edge_label[n].numpy().astype(int)))
@@ -301,7 +435,7 @@ class HeteroGraphExplainer():
         rcParams['figure.figsize'] = 14, 10
 
         # Creazione del grafo NetworkX
-        G = nx.DiGraph()
+        self.G = nx.DiGraph()
 
         # Definizione dei colori per i diversi tipi di nodi
         node_colors = {
@@ -328,46 +462,57 @@ class HeteroGraphExplainer():
                 target_id = f"{edge_type[2]}_{edge_data['edge_index'][1, i]}"
                 
                 edge_mask = self.explanation[edge_type]['edge_mask'][i]
-                source_node_mask = self.explanation[edge_type[0]]['node_mask'][edge_data['edge_index'][0, i]]
-                target_node_mask = self.explanation[edge_type[2]]['node_mask'][edge_data['edge_index'][1, i]]
 
                 if edge_mask > 0:
                     if source_id not in nodess:
                         nodess.append(source_id)
                     if target_id not in nodess:
                         nodess.append(target_id)
-                    # Aggiungi l'arco con il peso limitato
-                    G.add_edge(source_id, target_id, weight=min(100, 20000 * edge_mask.numpy()))
+                    self.G.add_edge(source_id, target_id)
 
         for entity_type, entity_data in entities:
             for i in range(entity_data['x'].shape[0]):
                 node_id = f"{entity_type}_{i}"
                 if node_id in nodess:
-                    G.add_node(node_id, type=entity_type)
+                    node_mask = entity_data['node_mask'][i]
+
+                    # Assicurati che node_mask sia un singolo valore scalare
+                    if isinstance(node_mask, torch.Tensor) and node_mask.numel() == 1:
+                        node_mask_value = node_mask.item()
+                    else:
+                        # Se node_mask contiene più valori, scegli un approccio appropriato qui
+                        # Ad esempio, potresti voler utilizzare la media o il massimo dei valori
+                        node_mask_value = node_mask.mean().item()  # o node_mask.max().item()
+
+                    # Calcola la dimensione del nodo
+                    node_size = max(10, node_mask_value * 10000)
+                    self.G.add_node(node_id, type=entity_type, size=node_size)
+
 
         # Converti il grafo NetworkX in un grafo Pyvis
-        net = Network(notebook=True, height="750px", width="100%")
-        net.from_nx(G)
+        net = Network(notebook=True, height="750px", width="100%", cdn_resources="remote")
+        net.from_nx(self.G)
 
-        # Assegna i colori ai nodi in Pyvis
+        # Assegna i colori e le dimensioni ai nodi in Pyvis
         for node in net.nodes:
             node['color'] = node_colors[node['type']]
+            if 'size' in self.G.nodes[node['id']]:
+                node['size'] = self.G.nodes[node['id']]['size']
 
-        # Crea una legenda HTML
+        # Crea una legenda HTML e aggiungila al grafo Pyvis
         legend_html = "<div style='position:absolute; right:20px; top:20px; width:200px; background-color:rgba(255,255,255,0.8); padding:10px; border-radius:5px; font-size:14px;'>"
         legend_html += "<strong>Node Types</strong><br>"
         for node_type, color in node_colors.items():
             legend_html += f"<span style='margin-left:10px; color:{color};'>{node_type}</span><br>"
         legend_html += "</div>"
-
-        # Aggiungi la legenda al grafo Pyvis
         net.html = legend_html
 
         # Visualizza il grafo in un file HTML
-        net.show('nx.html')
-        webbrowser.open('nx.html')
+        filepath = f'./explainability_results/explain_graph{current_datetime}.html'
+        net.show(filepath)
+        webbrowser.open(f'{os.getcwd()}/{filepath}')
 
-        plt.show()
+        return
 
     def explain_metrics(
         self,
@@ -377,404 +522,45 @@ class HeteroGraphExplainer():
         explainer = self.explainer
         explanation = self.explanation
 
-        # Verifica se il modello è di tipo regression
-        if explainer.model_config.mode == ModelMode.regression:
-            raise ValueError("Fidelity not defined for 'regression' models")
-
-        # Estrai node_mask e edge_mask da HeteroExplanation
-        node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
-        edge_mask_dict = {k: explanation[k].edge_mask for k in explanation.edge_types}
-
-        kwargs = {}
-        if isinstance(explanation, Explanation):
-            kwargs = {key: explanation[key] for key in explanation._model_args}
-        else:
-            kwargs = {
-                'edge_label_index': self.subgraph['visit', 'drug'].edge_label_index,
-                'edge_label': self.subgraph['visit', 'drug'].edge_label,
-                'mask': self.mask,
-            }
-
-        y = explanation.target
-        if explainer.explanation_type == ExplanationType.phenomenon:
-            y_hat = explainer.get_prediction(
-                self.node_features,
-                self.subgraph.edge_index_dict,
-                **kwargs,
-            )
-            y_hat = explainer.get_target(y_hat)
-
-        explain_y_hat = explainer.get_masked_prediction(
-            self.node_features,
-            self.subgraph.edge_index_dict,
-            node_mask_dict,
-            edge_mask_dict,
-            **kwargs,
-        )
-        # print('explain_y_hat: ' + str(explain_y_hat))
-        explain_y_hat = explainer.get_target(explain_y_hat)
-
-        # print('explain_y_hat: ' + str(explain_y_hat.shape))
-
-        # print('Before node mask: ' + str(node_mask_dict))
-        # print('Before edge mask: ' + str(edge_mask_dict))
-
-        for key in node_mask_dict.keys():
-            node_mask_dict[key] = 1. - node_mask_dict[key]
-
-        for key in edge_mask_dict.keys():
-            edge_mask_dict[key] = 1. - edge_mask_dict[key]
-
-        # print('After node mask: ' + str(node_mask_dict))
-        # print('After edge mask: ' + str(edge_mask_dict))
-
-        complement_y_hat = explainer.get_masked_prediction(
-            self.node_features,
-            self.subgraph.edge_index_dict,
-            node_mask_dict,
-            edge_mask_dict,
-            **kwargs,
-        )
-        # print('complement_y_hat: ' + str(complement_y_hat))
-        complement_y_hat = explainer.get_target(complement_y_hat)
-
-        # print('complement_y_hat: ' + str(complement_y_hat.shape))
-        
-        y = self.subgraph['visit', 'drug'].edge_label
-            
-        if explanation.get('index') is not None:
-            if explainer.explanation_type == ExplanationType.phenomenon:
-                y_hat = y_hat[explanation.index]
-            explain_y_hat = explain_y_hat[explanation.index]
-            complement_y_hat = complement_y_hat[explanation.index]
-
-        print('complement_y_hat: ' + str(complement_y_hat))
-        print('explain_y_hat: ' + str(explain_y_hat))
-        print('y: ' + str(y))
-        
-        if explainer.explanation_type == ExplanationType.model:
-            pos_fidelity = 1. - (complement_y_hat == y).float().mean()
-            neg_fidelity = 1. - (explain_y_hat == y).float().mean()
-        else:
-            pos_fidelity = ((y_hat == y).float() -
-                            (complement_y_hat == y).float()).abs().mean()
-            neg_fidelity = ((y_hat == y).float() -
-                            (explain_y_hat == y).float()).abs().mean()
-
-        
         for metric in metrics:
             if metric == "Fidelity":
+                pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, self.mask)
                 print("Fidelity Positive: " + str(float(pos_fidelity)))
                 print("Fidelity Negative: " + str(float(neg_fidelity)))
+            elif metric == "Fidelity_AUC":
+                fid_auc = fidelity_curve_auc(torch.tensor([pos_fidelity]), torch.tensor([neg_fidelity]), x=torch.tensor([0]))
+                print("Fidelity AUC: " + str(float(fid_auc)))
             elif metric == "Characterization_Score":
+                pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, self.mask)
                 score = characterization_score(float(pos_fidelity), float(neg_fidelity))
                 print("Characterization Score: " + str(score))
-                
-        return 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-    # def get_edge_index(self) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-    #     """
-    #     Get the edge indices for the graph.
-
-    #     Returns:
-    #         A tuple of torch.Tensor containing the edge indices for different relationships in the graph:
-    #         - edge_index_patient_to_visit: Edge indices pointing from patients to visits.
-    #         - edge_index_visit_to_symptom: Edge indices pointing from visits to symptoms.
-    #         - edge_index_visit_to_disease: Edge indices pointing from visits to diseases.
-    #         - edge_index_visit_to_procedure: Edge indices pointing from visits to procedures.
-    #         - edge_index_visit_to_drug: Edge indices pointing from visits to drugs.
-    #         - edge_index_disease_to_symptom: Edge indices pointing from diseases to symptoms.
-    #         - edge_index_anatomy_to_diagnosis: Edge indices pointing from anatomy to diagnosis.
-    #         - edge_index_diagnosis_to_drug: Edge indices pointing from diagnosis to drugs.
-    #         - edge_index_pharma_to_drug: Edge indices pointing from pharma to drugs.
-    #         - edge_index_symptom_to_drug: Edge indices pointing from symptoms to drugs.
-    #     """
-    #     # =============== MAPPING VISITS ===========================
-    #     # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
-    #     self.symp_df['HADM_ID'] = self.symp_df['HADM_ID'].map(self.hadm_dict)
-        
-    #     # Substituting the values in the 'SUBJECT_ID' column with the corresponding indices in the vocabulary
-    #     self.symp_df['SUBJECT_ID'] = self.symp_df['SUBJECT_ID'].map(self.subject_dict)
-
-    #     has_patient_id = torch.from_numpy(self.symp_df['SUBJECT_ID'].values)
-    #     has_visit_id = torch.from_numpy(self.symp_df['HADM_ID'].values)
-
-    #     # Create the edge index for the relationship 'has' between patients and visits
-    #     edge_index_patient_to_visit = torch.stack([has_patient_id, has_visit_id], dim=0)
-
-    #     # =============== MAPPING SYMPTOMS ===========================
-    #     # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
-    #     self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
-
-    #     presents_visit_id = torch.from_numpy(self.symp_df['HADM_ID'].values)
-    #     presents_symptom_id = torch.from_numpy(self.symp_df['ICD9_CODE'].values)
-
-    #     # Create the edge index for the relationship 'presents' between visits and symptoms
-    #     edge_index_visit_to_symptom = torch.stack([presents_visit_id, presents_symptom_id], dim=0)
-
-    #     # =============== MAPPING DIAGNOSES ===========================
-    #     # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
-    #     self.diag_df['ICD9_CODE_DIAG'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
-    #     # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
-    #     self.diag_df['HADM_ID'] = self.diag_df['HADM_ID'].map(self.hadm_dict)
-
-    #     # Drop the 'ICD9_CODE' column that is no longer needed
-    #     self.diag_df.drop('ICD9_CODE', axis=1, inplace=True)
-
-    #     hasdisease_visit_id = torch.from_numpy(self.diag_df['HADM_ID'].values)
-    #     hasdisease_disease_id = torch.from_numpy(self.diag_df['ICD9_CODE_DIAG'].values)
-
-    #     # Create the edge index for the relationship 'has' between visits and diseases
-    #     edge_index_visit_to_disease = torch.stack([hasdisease_visit_id, hasdisease_disease_id], dim=0)
-
-    #     # =============== MAPPING PROCEDURES ===========================
-    #     # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
-    #     self.proc_df['ICD9_CODE_PROC'] = self.proc_df['ICD9_CODE'].map(self.icd9_proc_dict)
-    #     # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
-    #     self.proc_df['HADM_ID'] = self.proc_df['HADM_ID'].map(self.hadm_dict)
-
-    #     # Drop the 'ICD9_CODE' column that is no longer needed
-    #     self.proc_df.drop('ICD9_CODE', axis=1, inplace=True)
-
-    #     hastreat_visit_id = torch.from_numpy(self.proc_df['HADM_ID'].values)
-    #     hastreat_procedure_id = torch.from_numpy(self.proc_df['ICD9_CODE_PROC'].values)
-
-    #     # Create the edge index for the relationship 'has_treat' between visits and procedures
-    #     edge_index_visit_to_procedure = torch.stack([hastreat_visit_id, hastreat_procedure_id], dim=0)
-
-    #     # =============== MAPPING DRUGS ===========================
-    #     # Substituting the values in the 'ATC_CODE' column with the corresponding indices in the vocabulary
-    #     self.drug_df['ATC_CODE_PRE'] = self.drug_df['ATC_CODE'].map(self.atc_pre_dict)
-    #     # Substituting the values in the 'HADM_ID' column with the corresponding indices in the vocabulary
-    #     self.drug_df['HADM_ID'] = self.drug_df['HADM_ID'].map(self.hadm_dict)
-
-    #     # Drop the 'ATC_CODE' column that is no longer needed
-    #     self.drug_df.drop('ATC_CODE', axis=1, inplace=True)
-
-    #     hasreceived_visit_id = torch.from_numpy(self.drug_df['HADM_ID'].values)
-    #     hasreceived_drug_id = torch.from_numpy(self.drug_df['ATC_CODE_PRE'].values)
-
-    #     # Create the edge index for the relationship 'has_received' between visits and drugs
-    #     edge_index_visit_to_drug = torch.stack([hasreceived_visit_id, hasreceived_drug_id], dim=0)
-
-    #     # ==== GRAPH ENRICHMENT ====
-    #     edge_index_disease_to_symptom = None
-    #     edge_index_anatomy_to_diagnosis = None
-    #     edge_index_diagnosis_to_drug = None
-    #     edge_index_pharma_to_drug = None
-    #     edge_index_symptom_to_drug = None
-
-    #     if self.k > 0:
-    #         for relation in self.static_kg:
-    #             if relation == "DIAG_SYMP":
-    #                 # =============== MAPPING DIAG_SYMP ===========================
-    #                 # Copy the dataframe with the relationship DIAG_SYMP
-    #                 diag_symp_df = self.stat_kg_df[relation].astype(str).copy()
-    #                 diag_symp_df = diag_symp_df[diag_symp_df["DIAG"].isin(self.icd9_diag_dict.keys())]
-
-    #                 # Substituting the values in the 'DIAG' column with the corresponding indices in the vocabulary
-    #                 diag_symp_df['DIAG'] = diag_symp_df['DIAG'].map(self.icd9_diag_dict)
-
-    #                 # Lookup the indices of the symptoms in the vocabulary
-    #                 last_index = max(self.icd9_symp_dict.values())
-
-    #                 # Add the new symptoms to the dictionary with consecutive indices
-    #                 for symptom_code in diag_symp_df['SYMP'].unique():
-    #                     if symptom_code not in self.icd9_symp_dict:
-    #                         last_index += 1
-    #                         self.icd9_symp_dict[symptom_code] = last_index
-    #                         self.symp_df = pd.concat([self.symp_df, pd.DataFrame({'SUBJECT_ID': [0], 'HADM_ID': [0], 'SEQ_NUM': [0], 'ICD9_CODE': [symptom_code]})], ignore_index=True)
-    #                 diag_symp_df['SYMP'] = diag_symp_df['SYMP'].map(self.icd9_symp_dict)
-
-    #                 if not anat_diag_df.empty:
-    #                     hasbeencaused_diag_id = torch.from_numpy(diag_symp_df['DIAG'].values)
-    #                     hasbeencaused_symp_id = torch.from_numpy(diag_symp_df['SYMP'].values)
-    #                     edge_index_disease_to_symptom = torch.stack([hasbeencaused_diag_id, hasbeencaused_symp_id], dim=0)
-    #                 else:
-    #                     # Initialize edge_index_disease_to_symptom as empty if the DataFrame is empty
-    #                     edge_index_disease_to_symptom = torch.empty((2, 0), dtype=torch.int64)
-
-    #             elif (relation == "ANAT_DIAG") and self.k == 2:
-    #                 # =============== MAPPING ANAT_DIAG ===========================
-    #                 # Copy the dataframe with the relationship ANAT_DIAG
-    #                 anat_diag_df = self.stat_kg_df[relation].astype(str).copy()
-    #                 anat_diag_df = anat_diag_df[anat_diag_df["DIAG"].isin(self.icd9_diag_dict.keys())]
-
-    #                 # Create a unique vocabulary from the codici UBERON
-    #                 uberon_anat_vocab = anat_diag_df['ANAT'].unique()
-    #                 # Create a dictionary that maps the codici UBERON to their index in the vocabulary
-    #                 uberon_anat_dict = {code: i for i, code in enumerate(uberon_anat_vocab)}
-
-    #                 # Substituting the values in the 'DIAG' column with the corresponding indices in the vocabulary
-    #                 anat_diag_df['DIAG'] = anat_diag_df['DIAG'].map(self.icd9_diag_dict)
-    #                 # Substituting the values in the 'ANAT' column with the corresponding indices in the vocabulary
-    #                 anat_diag_df['ANAT'] = anat_diag_df['ANAT'].map(uberon_anat_dict)
-
-    #                 if not anat_diag_df.empty:
-    #                     localizes_diag_id = torch.from_numpy(anat_diag_df['DIAG'].values)
-    #                     localizes_anat_id = torch.from_numpy(anat_diag_df['ANAT'].values)
-    #                     edge_index_anatomy_to_diagnosis = torch.stack([localizes_diag_id, localizes_anat_id], dim=0)
-    #                 else:
-    #                     # Initialize edge_index_anatomy_to_diagnosis as empty if the DataFrame is empty
-    #                     edge_index_anatomy_to_diagnosis = torch.empty((2, 0), dtype=torch.int64)
-
-    #             elif relation == "DRUG_DIAG":
-    #                 # =============== MAPPING DRUG_DIAG ===========================
-    #                 # Copy the dataframe with the relationship DRUG_DIAG
-    #                 drug_diag_df = self.stat_kg_df[relation].astype(str).copy()
-    #                 drug_diag_df = drug_diag_df[drug_diag_df["DIAG"].isin(self.icd9_diag_dict.keys())]
-    #                 drug_diag_df = drug_diag_df[drug_diag_df["DRUG"].isin(self.atc_pre_dict.keys())]
-
-    #                 # Substituting the values in the 'DIAG' column with the corresponding indices in the vocabulary
-    #                 drug_diag_df['DIAG'] = drug_diag_df['DIAG'].map(self.icd9_diag_dict)
-    #                 # Substituting the values in the 'DRUG' column with the corresponding indices in the vocabulary
-    #                 drug_diag_df['DRUG'] = drug_diag_df['DRUG'].map(self.atc_pre_dict)
-
-    #                 if not drug_diag_df.empty:
-    #                     treats_diag_id = torch.from_numpy(drug_diag_df['DIAG'].values)
-    #                     treats_drug_id = torch.from_numpy(drug_diag_df['DRUG'].values)
-    #                     edge_index_diagnosis_to_drug = torch.stack([treats_diag_id, treats_drug_id], dim=0)
-    #                 else:
-    #                     # Initialize edge_index_diagnosis_to_drug as empty if the DataFrame is empty
-    #                     edge_index_diagnosis_to_drug = torch.empty((2, 0), dtype=torch.int64)
-
-    #             elif (relation == "PC_DRUG") and (self.k == 2):
-    #                 # =============== MAPPING PC_DRUG ===========================
-    #                 # Copy the dataframe with the relationship PC_DRUG
-    #                 pc_drug_df = self.stat_kg_df[relation].astype(str).copy()
-    #                 pc_drug_df = pc_drug_df[pc_drug_df["DRUG"].isin(self.atc_pre_dict.keys())]
-
-    #                 # Create a unique vocabulary from the codici PHARMACLASS
-    #                 ndc_pc_vocab = pc_drug_df['PHARMACLASS'].unique()
-    #                 # Create a dictionary that maps the codici PHARMACLASS to their index in the vocabulary
-    #                 ndc_pc_dict = {code: i for i, code in enumerate(ndc_pc_vocab)}
-
-    #                 # Substituting the values in the 'DRUG' column with the corresponding indices in the vocabulary
-    #                 pc_drug_df['DRUG'] = pc_drug_df['DRUG'].map(self.atc_pre_dict)
-    #                 # Substituting the values in the 'PHARMACLASS' column with the corresponding indices in the vocabulary
-    #                 pc_drug_df['PHARMACLASS'] = pc_drug_df['PHARMACLASS'].map(ndc_pc_dict)
-
-    #                 if not pc_drug_df.empty:
-    #                     includes_pharma_id = torch.from_numpy(pc_drug_df['PHARMACLASS'].values)
-    #                     includes_drug_id = torch.from_numpy(pc_drug_df['DRUG'].values)
-    #                     edge_index_pharma_to_drug = torch.stack([includes_pharma_id, includes_drug_id], dim=0)
-    #                 else:
-    #                     # Initialize edge_index_pharma_to_drug as empty if the DataFrame is empty
-    #                     edge_index_pharma_to_drug = torch.empty((2, 0), dtype=torch.int64)
-
-    #             elif relation == "SYMP_DRUG":
-    #                 # =============== MAPPING SYMP_DRUG ===========================
-    #                 # Copy the dataframe with the relationship SYMP_DRUG
-    #                 symp_drug_df = self.stat_kg_df[relation].astype(str).copy()
-    #                 symp_drug_df = symp_drug_df[symp_drug_df["DRUG"].isin(self.atc_pre_dict.keys())] ###OCCHIO QUI
-
-    #                 # Substituting the values in the 'DRUG' column with the corresponding indices in the vocabulary
-    #                 symp_drug_df['DRUG'] = symp_drug_df['DRUG'].map(self.atc_pre_dict)
-
-    #                 # Lookup the indices of the symptoms in the vocabulary
-    #                 last_index = max(self.icd9_symp_dict.values())
-
-    #                 # Add the new symptoms to the dictionary with consecutive indices
-    #                 for symptom_code in symp_drug_df['SYMP'].unique():
-    #                     if symptom_code not in self.icd9_symp_dict:
-    #                         last_index += 1
-    #                         self.icd9_symp_dict[symptom_code] = last_index
-    #                         self.symp_df = pd.concat([self.symp_df, pd.DataFrame({'SUBJECT_ID': [0], 'HADM_ID': [0], 'SEQ_NUM': [0], 'ICD9_CODE': [symptom_code]})], ignore_index=True)
-    #                 symp_drug_df['SYMP'] = symp_drug_df['SYMP'].map(self.icd9_symp_dict)
-
-    #                 if not symp_drug_df.empty:
-    #                     causes_symp_id = torch.from_numpy(symp_drug_df['SYMP'].values)
-    #                     causes_drug_id = torch.from_numpy(symp_drug_df['DRUG'].values)
-    #                     edge_index_symptom_to_drug = torch.stack([causes_symp_id, causes_drug_id], dim=0)
-    #                 else:
-    #                     # Initialize edge_index_symptom_to_drug as empty if the DataFrame is empty
-    #                     edge_index_symptom_to_drug = torch.empty((2, 0), dtype=torch.int64)
-
-    #     return edge_index_patient_to_visit, edge_index_visit_to_symptom, edge_index_visit_to_disease, \
-    #             edge_index_visit_to_procedure, edge_index_visit_to_drug, edge_index_disease_to_symptom, \
-    #             edge_index_anatomy_to_diagnosis, edge_index_diagnosis_to_drug, edge_index_pharma_to_drug, \
-    #             edge_index_symptom_to_drug
-
-
-    # def graph_definition(self) -> HeteroData:
-    #     """
-    #     Defines the graph structure for the GNN model.
-
-    #     Returns:
-    #         HeteroData: The graph structure with node and edge indices.
-    #     """
-    #     # Graph definition:
-    #     graph = HeteroData()
-
-    #     # Save node indices:
-    #     graph["patient"].node_id = torch.arange(len(self.symp_df['SUBJECT_ID'].unique()))
-    #     graph["visit"].node_id = torch.arange(len(self.symp_df['HADM_ID'].unique()))
-    #     graph["symptom"].node_id = torch.arange(len(self.symp_df['ICD9_CODE'].unique()))
-    #     graph["procedure"].node_id = torch.arange(len(self.proc_df['ICD9_CODE_PROC'].unique()))
-
-    #     # Nodes of Static KG
-    #     if self.k == 2:
-    #         for relation in self.static_kg:
-    #             if relation == "ANAT_DIAG":
-    #                 graph["anatomy"].node_id = torch.arange(len(self.stat_kg_df[relation]['ANAT'].unique()))
-    #             if relation == "PC_DRUG":
-    #                 graph["pharmaclass"].node_id = torch.arange(len(self.stat_kg_df[relation]['PHARMACLASS'].unique()))
-
-    #     if self.label_key == "conditions":
-    #         graph["disease"].node_id = torch.arange(self.label_tokenizer.get_vocabulary_size())
-    #         graph["drug"].node_id = torch.arange(len(self.drug_df['ATC_CODE_PRE'].unique()))
-    #     else:
-    #         graph["disease"].node_id = torch.arange(len(self.diag_df['ICD9_CODE_DIAG'].unique()))
-    #         graph["drug"].node_id = torch.arange(self.label_tokenizer.get_vocabulary_size())
-
-    #     # Add the edge indices:
-    #     graph["patient", "has", "visit"].edge_index = self.edge_index_patient_to_visit
-    #     graph["visit", "presents", "symptom"].edge_index = self.edge_index_visit_to_symptom
-    #     graph["visit", "has", "disease"].edge_index = self.edge_index_visit_to_disease
-    #     graph["visit", "has_treat", "procedure"].edge_index = self.edge_index_visit_to_procedure
-    #     graph["visit", "has_received", "drug"].edge_index = self.edge_index_visit_to_drug
-
-    #     # Edges of Static KG
-    #     if self.k > 0:
-    #         for relation in self.static_kg:
-    #             if relation == "DIAG_SYMP":
-    #                 graph["disease", "has_been_caused_by", "symptom"].edge_index = self.edge_index_disease_to_symptom
-    #             if (relation == "ANAT_DIAG") and (self.k == 2):
-    #                 graph["disease", "localizes", "anatomy"].edge_index = self.edge_index_anatomy_to_diagnosis
-    #             if relation == "DRUG_DIAG":
-    #                 graph["disease", "treats", "drug"].edge_index = self.edge_index_diagnosis_to_drug
-    #             if (relation == "PC_DRUG") and (self.k == 2):
-    #                 graph["pharmaclass", "includes", "drug"].edge_index = self.edge_index_pharma_to_drug
-    #             if relation == "SYMP_DRUG":
-    #                 graph["symptom", "causes", "drug"].edge_index = self.edge_index_symptom_to_drug
-
-
-    #     # We also need to make sure to add the reverse edges from movies to users
-    #     # in order to let a GNN be able to pass messages in both directions.
-    #     # We can leverage the `T.ToUndirected()` transform for this from PyG:
-    #     graph = T.ToUndirected()(graph)
-
-    #     return graph
+            elif metric == "Unfaithfulness":
+                unfaithfulness_score = unfaithfulness(explainer, explanation, self.subgraph, self.node_features, self.mask, top_k=10)
+                print("Unfaithfulness Score: " + str(unfaithfulness_score))
+
+        return
+
+    def explain_results(
+        self
+    ):
+
+        icd = InnerMap.load("ICD9CM")
+        icdpr = InnerMap.load("ICD9PROC")
+        atc = InnerMap.load("ATC")
+
+        for node in self.G.nodes:
+            node_type, id = str(node).split('_')
+            if node_type == "patient":
+                print(node)
+            if node_type == "visit":
+                print(node)
+            if node_type == "disease":
+                print(str(node) + ": " + str(icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])))
+            if node_type == "symptom":
+                print(str(node) + ": " + str(icd.lookup(list(self.icd9_symp_dict.keys())[int(id)])))
+            if node_type == "procedure":
+                print(str(node) + ": " + str(icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id)])))
+            if node_type == "drug":
+                print(str(node) + ": " + str(atc.lookup(list(self.atc_pre_dict.keys())[int(id)])))
+
+        return
