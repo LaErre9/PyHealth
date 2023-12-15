@@ -964,7 +964,7 @@ class GNN(BaseModel):
             loss = self.calculate_loss(pred, self.subgraph['visit', 'disease'].edge_label, self.mask)
 
         # Prepare the predicted probabilities applying the sigmoid function
-        self.y_prob = pred
+        self.y_prob = self.prepare_y_prob(pred)
         # Create the probability matrix
         y_prob_mat = self.create_y_prob_mat()
 
