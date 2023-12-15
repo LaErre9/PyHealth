@@ -86,13 +86,13 @@ class GNN_Conv(torch.nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = F.leaky_relu(self.conv1(x, edge_index))
+        x = F.relu(self.conv1(x, edge_index))
         x = self.bn1(x)
-        x = F.leaky_relu(self.conv2(x, edge_index))
+        x = F.relu(self.conv2(x, edge_index))
         x = self.bn2(x)
-        x = F.leaky_relu(self.conv3(x, edge_index))
+        x = F.relu(self.conv3(x, edge_index))
         x = self.bn3(x)
-        x = F.leaky_relu(self.conv4(x, edge_index))
+        x = F.relu(self.conv4(x, edge_index))
         x = self.bn4(x)
         x = self.dropout(x)
 
@@ -169,7 +169,7 @@ class GNNLayer(torch.nn.Module):
                 edge_label_index,
             )
 
-        return F.sigmoid(pred)
+        return pred
 
 class GNN(BaseModel):
     """GNN Model.
@@ -897,7 +897,7 @@ class GNN(BaseModel):
         sample_weights = class_weights[y_true.long()]
  
         # Calculate the loss for each prediction
-        loss = F.binary_cross_entropy(pred, y_true, weight=sample_weights)
+        loss = F.binary_cross_entropy_with_logits(pred, y_true, weight=sample_weights)
 
         return loss
 
