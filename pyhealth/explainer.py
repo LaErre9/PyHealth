@@ -19,6 +19,7 @@ from torch_geometric.explain.metric import characterization_score, fidelity_curv
 from pyhealth.models import GNN
 from pyhealth.datasets import SampleEHRDataset
 from pyhealth.medcode import InnerMap
+from pyhealth.GNNExplainer import GNNExplainer
 
 # Save current date and time
 current_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -215,21 +216,24 @@ class HeteroGraphExplainer():
         self.explainer = Explainer(
             model=self.model.layer,
             # HYPERPARAMETERS
-            algorithm=CaptumExplainer('IntegratedGradients',
-                                        n_steps=500,
-                                        method='riemann_trapezoid'
+            # algorithm=CaptumExplainer('IntegratedGradients',
+            #                             n_steps=500,
+            #                             method='riemann_trapezoid'
+            #                           ),
+            algorithm=GNNExplainer(epochs=200
                                       ),
             explanation_type='model',
             model_config=dict(
                 mode='binary_classification',
                 task_level='edge',
-                return_type='probs',
+                # return_type='probs', # CAPTUM EXPLAINER
+                return_type='raw', # GNN EXPLAINER
             ),
             node_mask_type='attributes',
             edge_mask_type='object',
             threshold_config=dict(
                 threshold_type='topk',
-                value=10,
+                value=3,
             )
         )
 
