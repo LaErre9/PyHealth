@@ -72,29 +72,24 @@ class X_Dict(torch.nn.Module):
 
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
-    def __init__(self, hidden_channels, dropout=0.4):
+    def __init__(self, hidden_channels):
         super().__init__()
 
-        self.conv1 = SAGEConv((-1, -1), hidden_channels)
+        self.conv1 = SAGEConv((-1, -1), hidden_channels, normalize=True)
         self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
-        self.conv2 = SAGEConv((-1, -1), hidden_channels)
+        self.conv2 = SAGEConv((-1, -1), hidden_channels, normalize=True)
         self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
         self.conv3 = SAGEConv((-1, -1), hidden_channels)
-        self.bn3 = torch.nn.BatchNorm1d(hidden_channels)
-        self.conv4 = SAGEConv((-1, -1), hidden_channels)
-        self.bn4 = torch.nn.BatchNorm1d(hidden_channels)
-        self.dropout = torch.nn.Dropout(dropout)
+        #self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = F.relu(self.conv1(x, edge_index))
+        x = self.conv1(x, edge_index)
         x = self.bn1(x)
-        x = F.relu(self.conv2(x, edge_index))
+        x = F.relu(x)
+        x = self.conv2(x, edge_index)
         x = self.bn2(x)
-        x = F.relu(self.conv3(x, edge_index))
-        x = self.bn3(x)
-        x = F.relu(self.conv4(x, edge_index))
-        x = self.bn4(x)
-        x = self.dropout(x)
+        x = F.relu(x)
+        x = self.conv3(x, edge_index)
 
         return x
 
@@ -476,7 +471,7 @@ class GNN(BaseModel):
                             self.symp_df = pd.concat([self.symp_df, pd.DataFrame({'SUBJECT_ID': [0], 'HADM_ID': [0], 'SEQ_NUM': [0], 'ICD9_CODE': [symptom_code]})], ignore_index=True)
                     diag_symp_df['SYMP'] = diag_symp_df['SYMP'].map(self.icd9_symp_dict)
 
-                    if not anat_diag_df.empty:
+                    if not diag_symp_df.empty:
                         hasbeencaused_diag_id = torch.from_numpy(diag_symp_df['DIAG'].values)
                         hasbeencaused_symp_id = torch.from_numpy(diag_symp_df['SYMP'].values)
                         edge_index_disease_to_symptom = torch.stack([hasbeencaused_diag_id, hasbeencaused_symp_id], dim=0)
