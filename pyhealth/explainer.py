@@ -87,9 +87,14 @@ def fidelity(
             explain_y_hat = explain_y_hat[explanation.index]
             complement_y_hat = complement_y_hat[explanation.index]
 
+        ######### FIDELITY MODIFICATA PER DATASET SBILANCIATO #########
+        alpha = (((y == explain_y_hat) & (y == 0)).sum().item()) / len(y)
+
         if explainer.explanation_type == ExplanationType.model:
-            pos_fidelity = 1. - (complement_y_hat == y).float().mean()
-            neg_fidelity = 1. - (explain_y_hat == y).float().mean()
+            pos_fidelity = 1. - ((1 - alpha) * ((y == complement_y_hat) & (y == 0)).sum().item() +
+                                alpha * ((y == complement_y_hat) & (y == 1)).sum().item()) / len(y)
+            neg_fidelity = 1. - (alpha * ((y == explain_y_hat) & (y == 0)).sum().item() +
+                                (1 - alpha) * ((y == explain_y_hat) & (y == 1)).sum().item()) / len(y)
         else:
             pos_fidelity = ((y_hat == y).float() -
                             (complement_y_hat == y).float()).abs().mean()
@@ -194,7 +199,7 @@ class HeteroGraphExplainer():
             model=self.model.layer,
             # HYPERPARAMETERS
             algorithm=CaptumExplainer('IntegratedGradients',
-                                        n_steps=20,
+                                        n_steps=25,
                                         method='riemann_trapezoid'
                                       ),
             # algorithm=GNNExplainer(epochs=300,
