@@ -18,6 +18,7 @@ from pyhealth.models import GNN
 from pyhealth.datasets import SampleEHRDataset
 from pyhealth.medcode import InnerMap
 from pyhealth.GNNExplainer import GNNExplainer
+from pyhealth.SubgraphX import SubgraphX
 
 # Save current date and time
 current_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -88,13 +89,15 @@ def fidelity(
             complement_y_hat = complement_y_hat[explanation.index]
 
         ######### FIDELITY MODIFICATA PER DATASET SBILANCIATO #########
-        alpha = (((y == explain_y_hat) & (y == 0)).sum().item()) / len(y)
+        # alpha = (((y == explain_y_hat) & (y == 0)).sum().item()) / len(y)
 
         if explainer.explanation_type == ExplanationType.model:
-            pos_fidelity = 1. - ((1 - alpha) * ((y == complement_y_hat) & (y == 0)).sum().item() +
-                                alpha * ((y == complement_y_hat) & (y == 1)).sum().item()) / len(y)
-            neg_fidelity = 1. - (alpha * ((y == explain_y_hat) & (y == 0)).sum().item() +
-                                (1 - alpha) * ((y == explain_y_hat) & (y == 1)).sum().item()) / len(y)
+            # pos_fidelity = 1. - ((1 - alpha) * ((y == complement_y_hat) & (y == 0)).sum().item() +
+            #                     alpha * ((y == complement_y_hat) & (y == 1)).sum().item()) / len(y)
+            # neg_fidelity = 1. - (alpha * ((y == explain_y_hat) & (y == 0)).sum().item() +
+            #                     (1 - alpha) * ((y == explain_y_hat) & (y == 1)).sum().item()) / len(y)
+            pos_fidelity = 1. - (complement_y_hat == y).float().mean()
+            neg_fidelity = 1. - (explain_y_hat == y).float().mean()
         else:
             pos_fidelity = ((y_hat == y).float() -
                             (complement_y_hat == y).float()).abs().mean()
@@ -102,6 +105,45 @@ def fidelity(
                             (explain_y_hat == y).float()).abs().mean()
 
         return float(pos_fidelity), float(neg_fidelity)
+
+# def sparsity(
+#         explainer: Explainer,
+#         explanation: Explanation,
+# ) -> Tuple[float]:
+
+#     # Estrai node_mask e edge_mask da HeteroExplanation
+#     node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
+    
+#     sparsity_sum = 0
+#     N = len(node_mask_dict)
+
+#     for node_type in node_mask_dict:
+#         M_i = (node_mask_dict[node_type] > 0).sum()
+#         G_i = len(node_mask_dict[node_type]) 
+#         sparsity_sum += (1 - (M_i / G_i))
+
+#     sparsity_score = sparsity_sum / N
+
+#     return float(sparsity_score)
+    
+
+def sparsity(
+        subgraph: HeteroData,
+        explainer: Explainer,
+        explanation: Explanation,
+) -> Tuple[float]:
+
+    # Estrai node_mask e edge_mask da HeteroExplanation
+    node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
+
+    M = 0
+    for node_type in node_mask_dict:
+        M += (node_mask_dict[node_type] > 0).sum()
+
+    num_nodes = subgraph.num_nodes
+    sparsity_score = 1 - (M / num_nodes)
+    
+    return float(sparsity_score)
 
 def unfaithfulness(
         explainer: Explainer,
@@ -171,7 +213,7 @@ class HeteroGraphExplainer():
         self.dataset = dataset
         self.model = model
         self.label_key = label_key
-        self.top_k = 5
+        self.top_k = 100
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.label_tokenizer = self.model.get_label_tokenizer()
@@ -198,10 +240,14 @@ class HeteroGraphExplainer():
         self.explainer = Explainer(
             model=self.model.layer,
             # HYPERPARAMETERS
-            algorithm=CaptumExplainer('IntegratedGradients',
-                                        n_steps=25,
-                                        method='riemann_trapezoid'
-                                      ),
+            algorithm=SubgraphX(
+                model=self.model,
+                min_nodes=10
+            ),
+            # algorithm=CaptumExplainer('IntegratedGradients',
+            #                             n_steps=25,
+            #                             method='riemann_trapezoid'
+            #                           ),
             # algorithm=GNNExplainer(epochs=300,
             #                         lr=0.3,
             #                           ),
@@ -210,7 +256,7 @@ class HeteroGraphExplainer():
                 mode='binary_classification',
                 task_level='edge',
                 return_type='probs', # CAPTUM EXPLAINER
-                # return_type='raw', # GNN EXPLAINER
+                #return_type='raw', # GNN EXPLAINER
             ),
             node_mask_type='attributes',
             edge_mask_type='object',
@@ -448,7 +494,18 @@ class HeteroGraphExplainer():
                         ('drug', self.explanation['drug'])
                         ]
 
+        # MI PRENDO I NODI PIU' IMPORTANTI
         nodess = []
+        for node_type, node_data in self.explanation.node_items():
+            for i in range(node_data['node_mask'].shape[0]):
+                node_id = f"{node_type}_{i}"
+                node_mask = node_data['node_mask'][i]
+                if torch.any(node_mask):
+                    if node_id not in nodess:
+                        nodess.append(node_id)
+                    #print(f"{node_id}")
+                    #self.G.add_node(node_id, type=node_type)
+
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
                 source_id = f"{edge_type[0]}_{edge_data['edge_index'][0, i]}"
@@ -457,11 +514,11 @@ class HeteroGraphExplainer():
                 edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
                 if edge_mask > 0:
-                    if source_id not in nodess:
-                        nodess.append(source_id)
-                    if target_id not in nodess:
-                        nodess.append(target_id)
-                    self.G.add_edge(source_id, target_id)
+                    if source_id in nodess and target_id in nodess:
+                        # print(source_id + " -> " + target_id)
+                        # print(edge_type)
+                        # print()
+                        self.G.add_edge(source_id, target_id)
 
         for entity_type, entity_data in entities:
             for i in range(entity_data['x'].shape[0]):
@@ -478,7 +535,7 @@ class HeteroGraphExplainer():
                         node_mask_value = node_mask.mean().item()  # o node_mask.max().item()
 
                     # Calcola la dimensione del nodo
-                    node_size = max(10, node_mask_value * 1000)
+                    node_size = max(10, node_mask_value * 10)
                     self.G.add_node(node_id, type=entity_type, size=node_size)
 
 
@@ -534,6 +591,10 @@ class HeteroGraphExplainer():
                 unfaithfulness_score = unfaithfulness(explainer, explanation, self.subgraph, self.node_features, self.mask, top_k=10)
                 print("Unfaithfulness Score: " + str(unfaithfulness_score))
 
+            elif metric == "Sparsity":
+                sparsity_score = sparsity(self.subgraph, explainer, explanation)
+                print("Sparsity Score: " + str(sparsity_score))
+
         return
 
     def explain_results(self, n: int):
@@ -560,6 +621,19 @@ class HeteroGraphExplainer():
         diseases = []
         drugs = []
 
+
+        # MI PRENDO I NODI PIU' IMPORTANTI
+        nodess = []
+        for node_type, node_data in self.explanation.node_items():
+            for i in range(node_data['node_mask'].shape[0]):
+                node_id = f"{node_type}_{i}"
+                node_mask = node_data['node_mask'][i]
+                if torch.any(node_mask):
+                    if node_id not in nodess:
+                        nodess.append(node_id)
+                    #print(f"{node_id}")
+                    #self.G.add_node(node_id, type=node_type)
+
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
                 source_id = f"{edge_type[0]}_{edge_data['edge_index'][0, i]}"
@@ -568,28 +642,30 @@ class HeteroGraphExplainer():
                 edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
                 if edge_mask > 0:
-                    source, src_id = str(source_id).split('_')
-                    target, tgt_id = str(target_id).split('_')
+                    if source_id in nodess and target_id in nodess:
+                        source, src_id = str(source_id).split('_')
+                        target, tgt_id = str(target_id).split('_')
 
-                    if source == "visit" and src_id == str(visit_id):
-                        if target == "symptom":
-                            symptoms.append(target_id)
-                        elif target == "procedure":
-                            procedures.append(target_id)
-                        elif target == "disease":
-                            diseases.append(target_id)
-                        elif target == "drug":
-                            drugs.append(target_id)
+                        if source == "visit" and src_id == str(visit_id):
+                            if target == "symptom":
+                                symptoms.append(target_id)
+                            elif target == "procedure":
+                                procedures.append(target_id)
+                            elif target == "disease":
+                                diseases.append(target_id)
+                            elif target == "drug":
+                                drugs.append(target_id)
 
-                    elif target == "visit" and tgt_id == str(visit_id):
-                        if source == "symptom":
-                            symptoms.append(source_id)
-                        elif source == "procedure":
-                            procedures.append(source_id)
-                        elif source == "disease":
-                            diseases.append(source_id)
-                        elif source == "drug":
-                            drugs.append(source_id)
+                        elif target == "visit" and tgt_id == str(visit_id):
+                            if source == "symptom":
+                                symptoms.append(source_id)
+                            elif source == "procedure":
+                                procedures.append(source_id)
+                            elif source == "disease":
+                                diseases.append(source_id)
+                            elif source == "drug":
+                                drugs.append(source_id)
+
 
         # List of symptoms presented by the patient
         print('Symptoms presented by the patient:')
