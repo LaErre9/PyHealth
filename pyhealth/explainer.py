@@ -206,14 +206,21 @@ def unfaithfulness(
 class HeteroGraphExplainer():
     def __init__(
         self,
+        algorithm: str,
         dataset: SampleEHRDataset,
         model: GNN,
         label_key: str,
+        threshold_value: float,
+        top_k: int,
+        root: str="./explainability_results/",
     ):
         self.dataset = dataset
         self.model = model
         self.label_key = label_key
-        self.top_k = 100
+        self.algorithm = algorithm
+        self.threshold_value = threshold_value
+        self.top_k = top_k
+        self.root = root
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.label_tokenizer = self.model.get_label_tokenizer()
@@ -237,32 +244,42 @@ class HeteroGraphExplainer():
 
         self.node_features = self.model.x_dict(self.subgraph)
 
+        # Explainer
+        if self.algorithm == "IG":
+            explainer_algorithm = CaptumExplainer('IntegratedGradients',
+                                                  n_steps=25,
+                                                  method='riemann_trapezoid'
+                                                  )
+            type_returned = "probs"
+        elif self.algorithm == "GNNExplainer":
+            explainer_algorithm = GNNExplainer(epochs=300,
+                                               lr=0.3,
+                                               )
+            type_returned = "raw"
+        elif self.algorithm == "SubgraphX":
+            explainer_algorithm = SubgraphX(subgraph=self.subgraph,
+                                            max_nodes=10,
+                                            min_nodes=10,
+                                            )
+            type_returned = "probs"
+        else:
+            raise ValueError("Explainer algorithms not yet supported")
+
         self.explainer = Explainer(
             model=self.model.layer,
             # HYPERPARAMETERS
-            algorithm=SubgraphX(
-                model=self.model,
-                min_nodes=10
-            ),
-            # algorithm=CaptumExplainer('IntegratedGradients',
-            #                             n_steps=25,
-            #                             method='riemann_trapezoid'
-            #                           ),
-            # algorithm=GNNExplainer(epochs=300,
-            #                         lr=0.3,
-            #                           ),
+            algorithm=explainer_algorithm,
             explanation_type='model',
             model_config=dict(
                 mode='binary_classification',
                 task_level='edge',
-                return_type='probs', # CAPTUM EXPLAINER
-                #return_type='raw', # GNN EXPLAINER
+                return_type=type_returned,
             ),
             node_mask_type='attributes',
             edge_mask_type='object',
             threshold_config=dict(
                 threshold_type='topk',
-                value=self.top_k,
+                value=self.threshold_value,
             )
         )
 
@@ -431,7 +448,7 @@ class HeteroGraphExplainer():
         )
         print(f'Generated explanations in {self.explanation.available_explanations}')
 
-        path = f'./explainability_results/feature_importance_{current_datetime}.png'
+        path = f'{self.root}feature_importance_{current_datetime}.png'
 
         self.explanation.detach()
         self.explanation.visualize_feature_importance(path, top_k=self.top_k)
@@ -558,7 +575,7 @@ class HeteroGraphExplainer():
         net.html = legend_html
 
         # Visualizza il grafo in un file HTML
-        filepath = f'./explainability_results/explain_graph{current_datetime}.html'
+        filepath = f'{self.root}explain_graph{current_datetime}.html'
         net.show(filepath)
         webbrowser.open(f'{os.getcwd()}/{filepath}')
 
