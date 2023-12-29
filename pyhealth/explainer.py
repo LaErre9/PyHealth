@@ -252,7 +252,7 @@ class HeteroGraphExplainer():
                                                   )
             type_returned = "probs"
         elif self.algorithm == "GNNExplainer":
-            explainer_algorithm = GNNExplainer(epochs=300,
+            explainer_algorithm = GNNExplainer(epochs=100,
                                                lr=0.3,
                                                )
             type_returned = "raw"
