@@ -12,6 +12,7 @@ from torch.nn import Linear
 
 from torch_geometric.utils import to_networkx
 from torch_geometric.utils import negative_sampling
+from torch_geometric.utils import coalesce
 from torch_geometric.data import HeteroData
 import torch_geometric.transforms as T
 from torch_geometric.nn import SAGEConv, to_hetero
@@ -386,6 +387,9 @@ class GNN(BaseModel):
 
         # Create the edge index for the relationship 'has' between patients and visits
         edge_index_patient_to_visit = torch.stack([has_patient_id, has_visit_id], dim=0)
+
+        # Remove duplicate patient_id and visit_id pairs
+        edge_index_patient_to_visit = coalesce(edge_index_patient_to_visit)
 
         # =============== MAPPING SYMPTOMS ===========================
         # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
