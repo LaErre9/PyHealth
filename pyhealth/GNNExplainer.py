@@ -1,8 +1,9 @@
-from math import sqrt
 import networkx as nx
-from typing import Optional, Union, Dict
-
 import torch
+import sys
+
+from math import sqrt
+from typing import Optional, Union, Dict
 from torch import Tensor
 from torch.nn.parameter import Parameter
 
@@ -169,6 +170,10 @@ class GNNExplainer(ExplainerAlgorithm):
             if i == 0:
                 self._update_hard_masks(is_hetero)
 
+        print()
+
+        return
+
     def _initialize_masks(self, x, edge_index, is_hetero: bool):
 
         node_mask_type = self.explainer_config.node_mask_type
@@ -262,16 +267,15 @@ class GNNExplainer(ExplainerAlgorithm):
 
 
         # Calcola la penalità per i nodi disconnessi
-        disconnection_penalty = self._compute_disconnection_penalty()
+        # disconnection_penalty = self._compute_disconnection_penalty()
 
         # Aggiungi la penalità per i nodi disconnessi alla perdita totale
-        total_loss = loss + disconnection_penalty
+        total_loss = loss
 
-        print('Loss: ' + str(total_loss))    
-        print()
-        #print('Loss: ' + str(loss))
+        sys.stdout.write(f"\rLoss: {total_loss:.4f}")
+        sys.stdout.flush()
 
-        return loss
+        return total_loss
 
     def _compute_disconnection_penalty(self) -> torch.Tensor:
         if self.edge_mask is None or self.edge_index is None:
@@ -279,18 +283,14 @@ class GNNExplainer(ExplainerAlgorithm):
 
         # Calcola la penalità per ciascun tipo di spigolo nel grafo eterogeneo
         total_penalty = torch.tensor(0.0)
+        total_selected_edges = torch.tensor(0.0)
 
         for key, mask in self.edge_mask.items():
-            # Assumi che `self.edge_index` sia anch'esso un dizionario
-            print(key)
             edge_index = self.edge_index[key]
-            print("Edge index: " + str(edge_index))
 
             # Applica sigmoid e calcola la penalità per questo tipo di spigolo
-            edge_mask = mask.sigmoid()
             threshold = 0.1
-            selected_edges = edge_index[:, edge_mask > threshold]
-            print("Selected edges: " + str(selected_edges))
+            selected_edges = edge_index[:, mask > threshold]
 
             if selected_edges.size(1) == 0:
                 print("No selected edges")
@@ -305,17 +305,20 @@ class GNNExplainer(ExplainerAlgorithm):
                 continue
 
             largest_cc = max(nx.connected_components(G), key=len)
-            print("Largest connected component: " + str(largest_cc))
             num_disconnected_nodes = len(G) - len(largest_cc)
-            print('Num disconnected nodes: ' + str(num_disconnected_nodes))
+
             penalty_coefficient = 0.3
             penalty = penalty_coefficient * num_disconnected_nodes
-            total_penalty += torch.tensor(penalty)
-            print('Penalty: ' + str(total_penalty))
-            print()
-            print()
 
-        return total_penalty
+            total_penalty += torch.tensor(penalty)
+            total_selected_edges += torch.tensor(selected_edges.size(1))
+
+        final_penalty = total_penalty / total_selected_edges
+        print('Penalty: ' + str(final_penalty))
+        print()
+        print()
+
+        return final_penalty
 
     def _extract_mask(self, mask, hard_mask, is_hetero: bool):
 
