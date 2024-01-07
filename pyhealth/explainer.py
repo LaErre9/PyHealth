@@ -5,203 +5,23 @@ import webbrowser
 import pandas as pd
 from pyvis.network import Network
 import networkx as nx
-from typing import Dict, List, Tuple, Union, Optional
+from typing import Dict, List, Tuple, Union
 
 from torch.nn import functional as F
 from torch_geometric.utils import negative_sampling
 from torch_geometric.data import HeteroData
-from torch_geometric.explain import CaptumExplainer, Explainer, Explanation
-from torch_geometric.explain.config import ExplanationType, ModelMode, MaskType, ModelReturnType
+from torch_geometric.explain import CaptumExplainer, DummyExplainer, Explainer
 from torch_geometric.explain.metric import characterization_score, fidelity_curve_auc
 
 from pyhealth.models import GNN
 from pyhealth.datasets import SampleEHRDataset
 from pyhealth.medcode import InnerMap
 from pyhealth.GNNExplainer import GNNExplainer
-from pyhealth.SubgraphX import SubgraphX
+from pyhealth.explainer_metrics import *
 
 # Save current date and time
 current_datetime = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-def fidelity(
-        explainer: Explainer,
-        explanation: Explanation,
-        subgraph: HeteroData,
-        node_features: Dict[str, torch.Tensor],
-        mask: torch.Tensor,
-) -> Tuple[float, float]:
-        # Verifica se il modello è di tipo regression
-        if explainer.model_config.mode == ModelMode.regression:
-            raise ValueError("Fidelity not defined for 'regression' models")
-
-        # Estrai node_mask e edge_mask da HeteroExplanation
-        node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
-        edge_mask_dict = {k: explanation[k].edge_mask for k in explanation.edge_types}
-
-        kwargs = {}
-        if isinstance(explanation, Explanation):
-            kwargs = {key: explanation[key] for key in explanation._model_args}
-        else:
-            kwargs = {
-                'edge_label_index': subgraph['visit', 'drug'].edge_label_index,
-                'edge_label': subgraph['visit', 'drug'].edge_label,
-                'mask': mask,
-            }
-
-        y = subgraph['visit', 'drug'].edge_label
-        if explainer.explanation_type == ExplanationType.phenomenon:
-            y_hat = explainer.get_prediction(
-                node_features,
-                subgraph.edge_index_dict,
-                **kwargs,
-            )
-            y_hat = explainer.get_target(y_hat)
-
-        explain_y_hat = explainer.get_masked_prediction(
-            node_features,
-            subgraph.edge_index_dict,
-            node_mask_dict,
-            edge_mask_dict,
-            **kwargs,
-        )
-        explain_y_hat = explainer.get_target(explain_y_hat)
-
-        for key in node_mask_dict.keys():
-            node_mask_dict[key] = 1. - node_mask_dict[key]
-
-        for key in edge_mask_dict.keys():
-            edge_mask_dict[key] = 1. - edge_mask_dict[key]
-
-        complement_y_hat = explainer.get_masked_prediction(
-            node_features,
-            subgraph.edge_index_dict,
-            node_mask_dict,
-            edge_mask_dict,
-            **kwargs,
-        )
-        complement_y_hat = explainer.get_target(complement_y_hat)
-
-        if explanation.get('index') is not None:
-            y = y[explanation.index]
-            if explainer.explanation_type == ExplanationType.phenomenon:
-                y_hat = y_hat[explanation.index]
-            explain_y_hat = explain_y_hat[explanation.index]
-            complement_y_hat = complement_y_hat[explanation.index]
-
-        ######### FIDELITY MODIFICATA PER DATASET SBILANCIATO #########
-        # alpha = (((y == explain_y_hat) & (y == 0)).sum().item()) / len(y)
-
-        if explainer.explanation_type == ExplanationType.model:
-            # pos_fidelity = 1. - ((1 - alpha) * ((y == complement_y_hat) & (y == 0)).sum().item() +
-            #                     alpha * ((y == complement_y_hat) & (y == 1)).sum().item()) / len(y)
-            # neg_fidelity = 1. - (alpha * ((y == explain_y_hat) & (y == 0)).sum().item() +
-            #                     (1 - alpha) * ((y == explain_y_hat) & (y == 1)).sum().item()) / len(y)
-            pos_fidelity = 1. - (complement_y_hat == y).float().mean()
-            neg_fidelity = 1. - (explain_y_hat == y).float().mean()
-        else:
-            pos_fidelity = ((y_hat == y).float() -
-                            (complement_y_hat == y).float()).abs().mean()
-            neg_fidelity = ((y_hat == y).float() -
-                            (explain_y_hat == y).float()).abs().mean()
-
-        return float(pos_fidelity), float(neg_fidelity)
-
-# def sparsity(
-#         explainer: Explainer,
-#         explanation: Explanation,
-# ) -> Tuple[float]:
-
-#     # Estrai node_mask e edge_mask da HeteroExplanation
-#     node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
-    
-#     sparsity_sum = 0
-#     N = len(node_mask_dict)
-
-#     for node_type in node_mask_dict:
-#         M_i = (node_mask_dict[node_type] > 0).sum()
-#         G_i = len(node_mask_dict[node_type]) 
-#         sparsity_sum += (1 - (M_i / G_i))
-
-#     sparsity_score = sparsity_sum / N
-
-#     return float(sparsity_score)
-    
-
-def sparsity(
-        subgraph: HeteroData,
-        explainer: Explainer,
-        explanation: Explanation,
-) -> Tuple[float]:
-
-    # Estrai node_mask e edge_mask da HeteroExplanation
-    node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
-
-    M = 0
-    for node_type in node_mask_dict:
-        M += (node_mask_dict[node_type] > 0).sum()
-
-    num_nodes = subgraph.num_nodes
-    sparsity_score = 1 - (M / num_nodes)
-    
-    return float(sparsity_score)
-
-def unfaithfulness(
-        explainer: Explainer,
-        explanation: Explanation,
-        subgraph: HeteroData,
-        node_features: Dict[str, torch.Tensor],
-        mask: torch.Tensor,
-        top_k: Optional[int] = None,
-) -> float:
-    if explainer.model_config.mode == ModelMode.regression:
-        raise ValueError("Fidelity not defined for 'regression' models")
-
-    if top_k is not None and explainer.node_mask_type == MaskType.object:
-        raise ValueError("Cannot apply top-k feature selection based on a "
-                         "node mask of type 'object'")
-
-    # Estrai node_mask e edge_mask da HeteroExplanation
-    node_mask_dict = {k: explanation[k].node_mask for k in explanation.node_types if k != 'edge_mask'}
-    edge_mask_dict = {k: explanation[k].edge_mask for k in explanation.edge_types}
-    x, edge_index = node_features, subgraph.edge_index_dict
-    
-    kwargs = {}
-    if isinstance(explanation, Explanation):
-        kwargs = {key: explanation[key] for key in explanation._model_args}
-    else:
-        kwargs = {
-            'edge_label_index': subgraph['visit', 'drug'].edge_label_index,
-            'edge_label': subgraph['visit', 'drug'].edge_label,
-            'mask': mask,
-        }
-
-    y = subgraph['visit', 'drug'].edge_label
-
-    if y is None:  # == ExplanationType.phenomenon
-        y = explainer.get_prediction(x, edge_index, **kwargs)
-
-    feat_importance = {}
-    if node_mask_dict is not None and top_k is not None:
-        for key in node_mask_dict.keys():
-            feat_importance[key] = node_mask_dict[key].sum(dim=0)
-            _, top_k_index = feat_importance[key].topk(top_k)
-            node_mask_dict[key] = torch.zeros_like(node_mask_dict[key])
-            node_mask_dict[key][:, top_k_index] = 1.0
-
-    y_hat = explainer.get_masked_prediction(x, edge_index, node_mask_dict,
-                                            edge_mask_dict, **kwargs)
-
-    if explanation.get('index') is not None:
-        y, y_hat = y[explanation.index], y_hat[explanation.index]
-
-    if explainer.model_config.return_type == ModelReturnType.raw or \
-        explainer.model_config.return_type == ModelReturnType.probs:
-        y, y_hat = y.softmax(dim=-1), y_hat.softmax(dim=-1)
-    elif explainer.model_config.return_type == ModelReturnType.log_probs:
-        y, y_hat = y.exp(), y_hat.exp()
-
-    kl_div = F.kl_div(y.log(), y_hat, reduction='batchmean')
-    return 1 - float(torch.exp(-kl_div))
 
 class HeteroGraphExplainer():
     def __init__(
@@ -212,6 +32,7 @@ class HeteroGraphExplainer():
         label_key: str,
         threshold_value: float,
         top_k: int,
+        feat_size: int = 128,
         root: str="./explainability_results/",
     ):
         self.dataset = dataset
@@ -220,6 +41,7 @@ class HeteroGraphExplainer():
         self.algorithm = algorithm
         self.threshold_value = threshold_value
         self.top_k = top_k
+        self.feat_size = feat_size
         self.root = root
 
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -252,15 +74,12 @@ class HeteroGraphExplainer():
                                                   )
             type_returned = "probs"
         elif self.algorithm == "GNNExplainer":
-            explainer_algorithm = GNNExplainer(epochs=100,
-                                               lr=0.3,
+            explainer_algorithm = GNNExplainer(epochs=300,
+                                               lr=0.2,
                                                )
             type_returned = "raw"
-        elif self.algorithm == "SubgraphX":
-            explainer_algorithm = SubgraphX(subgraph=self.subgraph,
-                                            max_nodes=10,
-                                            min_nodes=10,
-                                            )
+        elif self.algorithm == "DummyExplainer":
+            explainer_algorithm = DummyExplainer()
             type_returned = "probs"
         else:
             raise ValueError("Explainer algorithms not yet supported")
@@ -438,7 +257,7 @@ class HeteroGraphExplainer():
         self,
         n: int
     ):
-
+        self.n = n
         self.explanation =self.explainer(
             x = self.node_features,
             edge_index = self.subgraph.edge_index_dict,
@@ -470,46 +289,17 @@ class HeteroGraphExplainer():
         self.G = nx.DiGraph()
 
         # Definizione dei colori per i diversi tipi di nodi
+        node_colors = {
+            'patient': '#add8e6',  # light blue
+            'visit': '#ff9999',    # soft red
+            'symptom': '#98fb98',  # pale green
+            'procedure': '#ffa07a', # light salmon
+            'disease': '#f08080',  # light coral
+            'drug': '#ffffe0'      # light yellow
+        }
         if k >= 2:
-            node_colors = {
-                'patient': '#add8e6',  # light blue
-                'visit': '#ff9999',    # soft red
-                'symptom': '#98fb98',  # pale green
-                'procedure': '#ffa07a', # light salmon
-                'disease': '#f08080',  # light coral
-                'drug': '#ffffe0',     # light yellow
-                'anatomy': '#f05555',  # light coral
-                'pharmaclass': '#ff5fe5',     # light yellow
-            }
-        else:
-            node_colors = {
-                'patient': '#add8e6',  # light blue
-                'visit': '#ff9999',    # soft red
-                'symptom': '#98fb98',  # pale green
-                'procedure': '#ffa07a', # light salmon
-                'disease': '#f08080',  # light coral
-                'drug': '#ffffe0'      # light yellow
-            }
-
-        # Assumi che `self.explanation` sia un oggetto definito precedentemente con i dati necessari
-        if k >= 2:
-            entities = [('patient', self.explanation['patient']),
-                        ('visit', self.explanation['visit']),
-                        ('symptom', self.explanation['symptom']),
-                        ('procedure', self.explanation['procedure']),
-                        ('disease', self.explanation['disease']),
-                        ('drug', self.explanation['drug']),
-                        ('anatomy', self.explanation['anatomy']),
-                        ('pharmaclass', self.explanation['pharmaclass'])
-                        ]
-        else:
-            entities = [('patient', self.explanation['patient']),
-                        ('visit', self.explanation['visit']),
-                        ('symptom', self.explanation['symptom']),
-                        ('procedure', self.explanation['procedure']),
-                        ('disease', self.explanation['disease']),
-                        ('drug', self.explanation['drug'])
-                        ]
+            node_colors['anatomy'] = '#f05555'  # light coral
+            node_colors['pharmaclass'] = '#ff5fe5'      # light yellow
 
         # MI PRENDO I NODI PIU' IMPORTANTI
         nodess = []
@@ -517,44 +307,29 @@ class HeteroGraphExplainer():
             for i in range(node_data['node_mask'].shape[0]):
                 node_id = f"{node_type}_{i}"
                 node_mask = node_data['node_mask'][i]
-                if torch.any(node_mask):
+
+                if node_mask.max() > 0:
                     if node_id not in nodess:
                         nodess.append(node_id)
-                    #print(f"{node_id}")
-                    #self.G.add_node(node_id, type=node_type)
+                        print(f"{node_id} Importance: " + str(node_mask.max()))
+
+                        # Calcola la dimensione del nodo
+                        node_size = max(10, node_mask.max().item() * 20)
+                        self.G.add_node(node_id, type=node_type, size=node_size)
+
+        self.nodess = nodess
 
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
                 source_id = f"{edge_type[0]}_{edge_data['edge_index'][0, i]}"
                 target_id = f"{edge_type[2]}_{edge_data['edge_index'][1, i]}"
 
-                edge_mask = self.explanation[edge_type]['edge_mask'][i]
+                # edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
-                if edge_mask > 0:
-                    if source_id in nodess and target_id in nodess:
-                        # print(source_id + " -> " + target_id)
-                        # print(edge_type)
-                        # print()
-                        self.G.add_edge(source_id, target_id)
-
-        for entity_type, entity_data in entities:
-            for i in range(entity_data['x'].shape[0]):
-                node_id = f"{entity_type}_{i}"
-                if node_id in nodess:
-                    node_mask = entity_data['node_mask'][i]
-
-                    # Assicurati che node_mask sia un singolo valore scalare
-                    if isinstance(node_mask, torch.Tensor) and node_mask.numel() == 1:
-                        node_mask_value = node_mask.item()
-                    else:
-                        # Se node_mask contiene più valori, scegli un approccio appropriato qui
-                        # Ad esempio, potresti voler utilizzare la media o il massimo dei valori
-                        node_mask_value = node_mask.mean().item()  # o node_mask.max().item()
-
-                    # Calcola la dimensione del nodo
-                    node_size = max(10, node_mask_value * 10)
-                    self.G.add_node(node_id, type=entity_type, size=node_size)
-
+                # if edge_mask > 0:
+                #     print(source_id + " -> " + target_id + " Importance: " + str(edge_mask))
+                if source_id in self.nodess and target_id in self.nodess:
+                    self.G.add_edge(source_id, target_id)
 
         # Converti il grafo NetworkX in un grafo Pyvis
         net = Network(notebook=True, height="750px", width="100%", cdn_resources="remote")
@@ -599,18 +374,22 @@ class HeteroGraphExplainer():
                 fid_auc = fidelity_curve_auc(torch.tensor([pos_fidelity]), torch.tensor([neg_fidelity]), x=torch.tensor([0]))
                 print("Fidelity AUC: " + str(float(fid_auc)))
 
-            elif metric == "Characterization_Score":
+            elif metric == "Fidelity_F1":
                 pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, self.mask)
-                score = characterization_score(float(pos_fidelity), float(neg_fidelity))
-                print("Characterization Score: " + str(score))
+                score = (2 * pos_fidelity * (1-neg_fidelity)) / (pos_fidelity + (1-neg_fidelity))
+                print("Fidelity (weighted): " + str(score))
 
             elif metric == "Unfaithfulness":
-                unfaithfulness_score = unfaithfulness(explainer, explanation, self.subgraph, self.node_features, self.mask, top_k=10)
+                unfaithfulness_score = unfaithfulness(explainer, explanation, self.subgraph, self.node_features, self.mask, top_k=self.feat_size)
                 print("Unfaithfulness Score: " + str(unfaithfulness_score))
 
             elif metric == "Sparsity":
-                sparsity_score = sparsity(self.subgraph, explainer, explanation)
+                sparsity_score = sparsity(explainer, explanation)
                 print("Sparsity Score: " + str(sparsity_score))
+
+            elif metric == "Instability":
+                stability_score = stability(explainer, explanation, self.subgraph, self.mask, self.n, self.node_features)
+                print("Instability Score: " + str(stability_score))
 
         return
 
@@ -638,19 +417,6 @@ class HeteroGraphExplainer():
         diseases = []
         drugs = []
 
-
-        # MI PRENDO I NODI PIU' IMPORTANTI
-        nodess = []
-        for node_type, node_data in self.explanation.node_items():
-            for i in range(node_data['node_mask'].shape[0]):
-                node_id = f"{node_type}_{i}"
-                node_mask = node_data['node_mask'][i]
-                if torch.any(node_mask):
-                    if node_id not in nodess:
-                        nodess.append(node_id)
-                    #print(f"{node_id}")
-                    #self.G.add_node(node_id, type=node_type)
-
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
                 source_id = f"{edge_type[0]}_{edge_data['edge_index'][0, i]}"
@@ -659,7 +425,7 @@ class HeteroGraphExplainer():
                 edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
                 if edge_mask > 0:
-                    if source_id in nodess and target_id in nodess:
+                    if source_id in self.nodess and target_id in self.nodess:
                         source, src_id = str(source_id).split('_')
                         target, tgt_id = str(target_id).split('_')
 
@@ -683,6 +449,10 @@ class HeteroGraphExplainer():
                             elif source == "drug":
                                 drugs.append(source_id)
 
+        symptoms = list(set(symptoms))
+        procedures = list(set(procedures))
+        diseases = list(set(diseases))
+        drugs = list(set(drugs))
 
         # List of symptoms presented by the patient
         print('Symptoms presented by the patient:')
