@@ -71,8 +71,6 @@ def stability(
             x = node_features_pert,
             edge_index = perturbed_edge_index_dict,
             edge_label_index = subgraph['visit', 'drug'].edge_label_index[:, n],
-            edge_label = subgraph['visit', 'drug'].edge_label[n],
-            mask = mask
         )
 
         ori_exp_mask = torch.zeros_like(explanation['visit', 'drug'].edge_mask)
@@ -110,8 +108,6 @@ def fidelity(
     else:
         kwargs = {
             'edge_label_index': subgraph['visit', 'drug'].edge_label_index,
-            'edge_label': subgraph['visit', 'drug'].edge_label,
-            'mask': mask,
         }
 
     y = subgraph['visit', 'drug'].edge_label
@@ -220,8 +216,6 @@ def unfaithfulness(
     else:
         kwargs = {
             'edge_label_index': subgraph['visit', 'drug'].edge_label_index,
-            'edge_label': subgraph['visit', 'drug'].edge_label,
-            'mask': mask,
         }
 
     y = subgraph['visit', 'drug'].edge_label
@@ -233,7 +227,7 @@ def unfaithfulness(
     if node_mask_dict is not None and top_k is not None:
         for key in node_mask_dict.keys():
             feat_importance[key] = node_mask_dict[key].sum(dim=0)
-            _, top_k_index = feat_importance[key].topk(top_k)
+            _, top_k_index = feat_importance[key].topk(int(0.25*top_k)) # 2208.09339.pdf (arxiv.org)
             node_mask_dict[key] = torch.zeros_like(node_mask_dict[key])
             node_mask_dict[key][:, top_k_index] = 1.0
 
@@ -249,6 +243,6 @@ def unfaithfulness(
     elif explainer.model_config.return_type == ModelReturnType.log_probs:
         y, y_hat = y.exp(), y_hat.exp()
 
-    kl_div = F.kl_div(y.log(), y_hat, reduction='batchmean')
+    kl_div = F.kl_div(y.log(), y_hat, reduction='sum')
 
     return 1 - float(torch.exp(-kl_div))

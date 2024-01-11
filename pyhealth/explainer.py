@@ -73,6 +73,10 @@ class HeteroGraphExplainer():
                                                   method='riemann_trapezoid'
                                                   )
             type_returned = "probs"
+        elif self.algorithm == "Saliency":
+            explainer_algorithm = CaptumExplainer('Saliency',
+                                                 )
+            type_returned = "probs"
         elif self.algorithm == "GNNExplainer":
             explainer_algorithm = GNNExplainer(epochs=300,
                                                lr=0.2,
@@ -262,8 +266,6 @@ class HeteroGraphExplainer():
             x = self.node_features,
             edge_index = self.subgraph.edge_index_dict,
             edge_label_index = self.subgraph['visit', 'drug'].edge_label_index[:, n],
-            edge_label = self.subgraph['visit', 'drug'].edge_label[n],
-            mask = self.mask
         )
         print(f'Generated explanations in {self.explanation.available_explanations}')
 
