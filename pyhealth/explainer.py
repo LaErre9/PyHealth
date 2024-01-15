@@ -32,7 +32,7 @@ class HeteroGraphExplainer():
         label_key: str,
         threshold_value: float,
         top_k: int,
-        feat_size: int = 128,
+        feat_size: int = 32,
         root: str="./explainability_results/",
     ):
         self.dataset = dataset
@@ -72,6 +72,10 @@ class HeteroGraphExplainer():
                                                   n_steps=25,
                                                   method='riemann_trapezoid'
                                                   )
+            type_returned = "probs"
+        elif self.algorithm == "Saliency":
+            explainer_algorithm = CaptumExplainer('Saliency',
+                                                 )
             type_returned = "probs"
         elif self.algorithm == "GNNExplainer":
             explainer_algorithm = GNNExplainer(epochs=300,
@@ -302,7 +306,7 @@ class HeteroGraphExplainer():
             node_colors['pharmaclass'] = '#ff5fe5'      # light yellow
 
         # MI PRENDO I NODI PIU' IMPORTANTI
-        nodess = []
+        nodess = {}
         for node_type, node_data in self.explanation.node_items():
             for i in range(node_data['node_mask'].shape[0]):
                 node_id = f"{node_type}_{i}"
@@ -310,7 +314,7 @@ class HeteroGraphExplainer():
 
                 if node_mask.max() > 0:
                     if node_id not in nodess:
-                        nodess.append(node_id)
+                        nodess.update({node_id: node_mask.max().item()})
                         print(f"{node_id} Importance: " + str(node_mask.max()))
 
                         # Calcola la dimensione del nodo
@@ -318,7 +322,7 @@ class HeteroGraphExplainer():
                         self.G.add_node(node_id, type=node_type, size=node_size)
 
         self.nodess = nodess
-
+        
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
                 source_id = f"{edge_type[0]}_{edge_data['edge_index'][0, i]}"
@@ -328,7 +332,7 @@ class HeteroGraphExplainer():
 
                 # if edge_mask > 0:
                 #     print(source_id + " -> " + target_id + " Importance: " + str(edge_mask))
-                if source_id in self.nodess and target_id in self.nodess:
+                if source_id in self.nodess.keys() and target_id in self.nodess.keys():
                     self.G.add_edge(source_id, target_id)
 
         # Converti il grafo NetworkX in un grafo Pyvis
@@ -402,15 +406,20 @@ class HeteroGraphExplainer():
         visit_id = self.subgraph['visit', 'drug'].edge_label_index[:, n][0].item()
         drug_id = self.subgraph['visit', 'drug'].edge_label_index[:, n][1].item()
 
-        # Print prescription decision
-        if self.explanation['prediction'].numpy() > 0.5:
-            print(f'In visit {visit_id}, the patient received the drug {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}.')
-        else:
-            print(f'In visit {visit_id}, the patient did not receive the drug {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}.')
+        # Create dynamic text
+        prompt_recruiter_doctors = """"""
 
-        print()
-        print('Medical Visit Details:')
-        print()
+        # Prescription decision
+        if self.explanation['prediction'].numpy() > 0.5:
+            prompt_recruiter_doctors += f"""Generate a JSON file with the list of suitable specialised doctors to consult the case of a patient with multiple, complex and hypothetically related health problems with the aim of verifying whether the administration of the drug:
+            {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])} in the visit {visit_id} is consistent or inconsistent with the patient's medical history."""
+            #dynamic_text += f'In visit {visit_id}, the patient received the drug {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}.'
+        else:
+            prompt_recruiter_doctors += f"""Generate a JSON file with the list of suitable specialised doctors to consult the case of a patient with multiple, complex and hypothetically related health problems with the aim of verifying whether the NO-administration of the drug:
+            {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])} in the visit {visit_id} is consistent or inconsistent with the patient's medical history."""
+            #dynamic_text += f'In visit {visit_id}, the patient did not receive the drug {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}.'
+
+        prompt_recruiter_doctors += f"\n\nThe patient's medical history includes:\n\n"
 
         symptoms = []
         procedures = []
@@ -425,7 +434,7 @@ class HeteroGraphExplainer():
                 edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
                 if edge_mask > 0:
-                    if source_id in self.nodess and target_id in self.nodess:
+                    if source_id in self.nodess.keys() and target_id in self.nodess.keys():
                         source, src_id = str(source_id).split('_')
                         target, tgt_id = str(target_id).split('_')
 
@@ -455,41 +464,49 @@ class HeteroGraphExplainer():
         drugs = list(set(drugs))
 
         # List of symptoms presented by the patient
-        print('Symptoms presented by the patient:')
+        prompt_recruiter_doctors += 'Symptoms presented by the patient:\n'
         for symptom in symptoms:
             node_type, id = str(symptom).split('_')
             if node_type == "symptom":
-                symptom = icd.lookup(list(self.icd9_symp_dict.keys())[int(id)])
-                print(symptom + " " + id)
+                symptom_icd = icd.lookup(list(self.icd9_symp_dict.keys())[int(id)])
+                prompt_recruiter_doctors += symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
 
-        print()
+        prompt_recruiter_doctors += "\n"
 
         # List of procedures performed on the patient
-        print('Procedures performed on the patient:')
+        prompt_recruiter_doctors += 'Procedures performed on the patient:\n'
         for procedure in procedures:
             node_type, id = str(procedure).split('_')
             if node_type == "procedure":
-                procedure = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id)])
-                print(procedure + " " + id)
+                procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id)])
+                prompt_recruiter_doctors += procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
 
-        print()
+        prompt_recruiter_doctors += "\n"
 
         # List of patient's diagnoses
-        print('Patient diagnoses:')
+        prompt_recruiter_doctors += 'Patient diagnoses:\n'
         for disease in diseases:
             node_type, id = str(disease).split('_')
             if node_type == "disease":
-                disease = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
-                print(disease + " " + id)
+                disease_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
+                prompt_recruiter_doctors += disease_icd + " - Importance level: " + str(round(self.nodess[disease], 4)) + "\n"
 
-        print()
+        prompt_recruiter_doctors += "\n"
 
         # List of drugs administered to the patient
-        print('Drugs administered to the patient:')
+        prompt_recruiter_doctors += 'Drugs administered to the patient:\n'
         for drug in drugs:
             node_type, id = str(drug).split('_')
             if node_type == "drug":
-                drug = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
-                print(drug + " " + id)
+                drug_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
+                prompt_recruiter_doctors += drug_atc + " - Importance level: " + str(round(self.nodess[drug], 4)) + "\n"
 
-        return
+        prompt_recruiter_doctors += f"""Focus on identifying physicians according to their expertise in each aspect of the patient's condition. 
+        For each doctor listed, Generate ONLY JSON file that has:
+        - 'role': 'Specify medical speciality
+        - 'description': 'Explain why each doctor is essential for this case, explaining their expertise in relation to the patient's specific medical
+        problems and the need for safe administration of the drug: {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}"""
+
+        print(prompt_recruiter_doctors)
+
+        return prompt_recruiter_doctors
