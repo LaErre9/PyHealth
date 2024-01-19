@@ -32,7 +32,7 @@ class HeteroGraphExplainer():
         label_key: str,
         threshold_value: float,
         top_k: int,
-        feat_size: int = 128,
+        feat_size: int = 32,
         root: str="./explainability_results/",
     ):
         self.dataset = dataset
@@ -421,7 +421,7 @@ class HeteroGraphExplainer():
                             self.G.add_node(node_id, type=node_type, size=node_size)
 
         self.nodess = nodess
-
+        
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
                 source_id = f"{edge_type[0]}_{edge_data['edge_index'][0, i]}"
