@@ -409,6 +409,8 @@ class GNN(BaseModel):
         # Create the edge index for the relationship 'presents' between visits and symptoms
         edge_index_visit_to_symptom = torch.stack([presents_visit_id, presents_symptom_id], dim=0)
 
+        edge_index_visit_to_symptom = coalesce(edge_index_visit_to_symptom)
+
         # =============== MAPPING DIAGNOSES ===========================
         # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
         self.diag_df['ICD9_CODE_DIAG'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
@@ -423,6 +425,8 @@ class GNN(BaseModel):
 
         # Create the edge index for the relationship 'has' between visits and diseases
         edge_index_visit_to_disease = torch.stack([hasdisease_visit_id, hasdisease_disease_id], dim=0)
+
+        edge_index_visit_to_disease = coalesce(edge_index_visit_to_disease)
 
         # =============== MAPPING PROCEDURES ===========================
         # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
@@ -439,6 +443,8 @@ class GNN(BaseModel):
         # Create the edge index for the relationship 'has_treat' between visits and procedures
         edge_index_visit_to_procedure = torch.stack([hastreat_visit_id, hastreat_procedure_id], dim=0)
 
+        edge_index_visit_to_procedure = coalesce(edge_index_visit_to_procedure)
+
         # =============== MAPPING DRUGS ===========================
         # Substituting the values in the 'ATC_CODE' column with the corresponding indices in the vocabulary
         self.drug_df['ATC_CODE_PRE'] = self.drug_df['ATC_CODE'].map(self.atc_pre_dict)
@@ -453,6 +459,8 @@ class GNN(BaseModel):
 
         # Create the edge index for the relationship 'has_received' between visits and drugs
         edge_index_visit_to_drug = torch.stack([hasreceived_visit_id, hasreceived_drug_id], dim=0)
+
+        edge_index_visit_to_drug = coalesce(edge_index_visit_to_drug)
 
         # ==== GRAPH ENRICHMENT ====
         edge_index_disease_to_symptom = None
@@ -666,7 +674,7 @@ class GNN(BaseModel):
             self.subgraph['visit', 'has_received', 'drug'].edge_label_index = torch.cat((self.subgraph['visit', 'has_received', 'drug'].edge_label_index, neg_edges), dim=1)
             self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.cat((self.subgraph['visit', 'has_received', 'drug'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
         else:
-            neg_edges = negative_sampling(self.subgraph['visit', 'has', 'disease'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['drug'].num_nodes))
+            neg_edges = negative_sampling(self.subgraph['visit', 'has', 'disease'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['disease'].num_nodes))
             self.subgraph['visit', 'has', 'disease'].edge_label_index = self.subgraph['visit', 'has', 'disease'].edge_index
             self.subgraph['visit', 'has', 'disease'].edge_label = torch.ones(self.subgraph['visit', 'has', 'disease'].edge_label_index.shape[1], dtype=torch.float)
             self.subgraph['visit', 'has', 'disease'].edge_label_index = torch.cat((self.subgraph['visit', 'has', 'disease'].edge_label_index, neg_edges), dim=1)
@@ -786,15 +794,23 @@ class GNN(BaseModel):
         symptom = self.symp_df["ICD9_CODE"].unique()
         select_symptom = torch.from_numpy(symptom)
  
-        self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
-        disease = self.diag_df["ICD9_CODE"].unique()
-        select_disease = torch.from_numpy(disease)
+        if self.label_key == "drugs":
+            self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
+            disease = self.diag_df["ICD9_CODE"].unique()
+            select_disease = torch.from_numpy(disease)
+        else:
+            self.drug_df['ATC_CODE'] = self.drug_df['ATC_CODE'].map(self.atc_pre_dict)
+            drug = self.drug_df["ATC_CODE"].unique()
+            select_drug = torch.from_numpy(drug)
  
         self.proc_df['ICD9_CODE'] = self.proc_df['ICD9_CODE'].map(self.icd9_proc_dict)
         procedure = self.proc_df["ICD9_CODE"].unique()
         select_procedure = torch.from_numpy(procedure)
  
-        subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "disease": select_disease})
+        if self.label_key == "drugs":
+            subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "disease": select_disease})
+        else:
+            subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "drug": select_drug})
 
         return subgraph
 

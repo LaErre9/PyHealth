@@ -32,6 +32,8 @@ def diagnosis_prediction_mimic3_fn(patient: Patient):
 
         # ATC 3 level
         drugs = [drug[:4] for drug in drugs]
+        # Conditions 3 level
+        conditions = [condition[:3] for condition in conditions]
         # exclude: visits without condition, procedure, or drug code
         if len(conditions) * len(procedures) * len(drugs) * len(symptoms) == 0:
             continue
