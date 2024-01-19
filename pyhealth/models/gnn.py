@@ -15,7 +15,7 @@ from torch_geometric.utils import negative_sampling
 from torch_geometric.utils import coalesce
 from torch_geometric.data import HeteroData
 import torch_geometric.transforms as T
-from torch_geometric.nn import SAGEConv, to_hetero
+from torch_geometric.nn import GraphConv, to_hetero
 
 from pyhealth.models import BaseModel
 from pyhealth.datasets import SampleEHRDataset
@@ -23,9 +23,17 @@ from pyhealth.datasets import SampleEHRDataset
 
 #### Weights for the loss function to handle unbalanced classes:
 def compute_class_weights(y_true):
-    class_counts = torch.bincount(y_true.long())
-    total_samples = y_true.size(0)
-    class_weights = total_samples / (len(class_counts) * class_counts.float())
+
+    zero_count = torch.sum(y_true == 0)
+    zero_ratio = (1 / zero_count) * (len(y_true) / 2.0)
+    # print("Zero ratio: ", zero_ratio)
+
+    one_count = torch.sum(y_true == 1)
+    one_ratio = (1 / one_count) * (len(y_true) / 2.0)
+    # print("One ratio: ", one_ratio)
+
+    class_weights = torch.tensor([zero_ratio, one_ratio]).to(y_true.device)
+
     return class_weights
 
 # Since the dataset does not come with rich features, we also learn four
@@ -76,12 +84,12 @@ class GNN_Conv(torch.nn.Module):
     def __init__(self, hidden_channels):
         super().__init__()
 
-        self.conv1 = SAGEConv((-1, -1), hidden_channels, normalize=True)
+        self.conv1 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
         self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
-        self.conv2 = SAGEConv((-1, -1), hidden_channels, normalize=True)
+        self.conv2 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
         self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
-        self.conv3 = SAGEConv((-1, -1), hidden_channels)
-        #self.dropout = torch.nn.Dropout(dropout)
+        self.conv3 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
+        self.dropout = torch.nn.Dropout(p=0.3)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x, edge_index)
@@ -91,6 +99,7 @@ class GNN_Conv(torch.nn.Module):
         x = self.bn2(x)
         x = F.relu(x)
         x = self.conv3(x, edge_index)
+        x = self.dropout(x)
 
         return x
 
@@ -130,7 +139,6 @@ class GNNLayer(torch.nn.Module):
         static_kg: List[str],
         k: int,
         hidden_channels: int,
-        embedding_dim: int,
         **kwargs,
     ):
         super(GNNLayer, self).__init__()
@@ -148,7 +156,7 @@ class GNNLayer(torch.nn.Module):
         self.classifier = Classifier(hidden_channels)
 
     def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[str, torch.Tensor], 
-                edge_label_index: torch.Tensor, edge_label: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+                edge_label_index: torch.Tensor) -> torch.Tensor:
 
         z_dict = self.gnn(x_dict, edge_index_dict)
 
@@ -182,7 +190,7 @@ class GNN(BaseModel):
         dataset: the dataset to train the model. It is used to query certain
             information such as the set of all tokens.
         embedding_dim: the embedding dimension. Default is 128.
-        hidden_channels: the hidden channels. Default is 32.
+        hidden_channels: the hidden channels. Default is 128.
         **kwargs: other parameters for the GNN layer.
     """
     def __init__(
@@ -233,7 +241,7 @@ class GNN(BaseModel):
 
         self.x_dict = X_Dict(self.k, self.static_kg, self.graph, self.embedding_dim)
 
-        self.layer = GNNLayer(self.graph, self.label_key, self.static_kg, self.k, self.hidden_channels, self.embedding_dim)
+        self.layer = GNNLayer(self.graph, self.label_key, self.static_kg, self.k, self.hidden_channels)
 
     def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Union[None, Dict[str, pd.DataFrame]]]:
         """Gets the dataframe of conditions, procedures, symptoms and drugs of patients.
@@ -888,11 +896,10 @@ class GNN(BaseModel):
 
     def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
-        # # Calculate class weights
-        # class_weights = compute_class_weights(y_true)
- 
-        # # Create a tensor of weights for each datapoint
-        class_weights = torch.tensor([0.6, 0.9])
+        # Calculate class weights
+        class_weights = compute_class_weights(y_true)
+        
+        # Create a tensor of weights for each datapoint
         sample_weights = class_weights[y_true.long()]
  
         # Calculate the loss for each prediction
@@ -953,13 +960,11 @@ class GNN(BaseModel):
         # Get the loss and predicted probabilities
         if self.label_key == "drugs":
             pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
-                                self.subgraph['visit', 'drug'].edge_label_index, 
-                                self.subgraph['visit', 'drug'].edge_label, self.mask)
+                                self.subgraph['visit', 'drug'].edge_label_index)
             loss = self.calculate_loss(pred, self.subgraph['visit', 'drug'].edge_label, self.mask)
         else:
             pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
-                                self.subgraph['visit', 'disease'].edge_label_index, 
-                                self.subgraph['visit', 'disease'].edge_label, self.mask)
+                                self.subgraph['visit', 'disease'].edge_label_index)
             loss = self.calculate_loss(pred, self.subgraph['visit', 'disease'].edge_label, self.mask)
 
         # Prepare the predicted probabilities applying the sigmoid function

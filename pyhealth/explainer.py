@@ -266,8 +266,6 @@ class HeteroGraphExplainer():
             x = self.node_features,
             edge_index = self.subgraph.edge_index_dict,
             edge_label_index = self.subgraph['visit', 'drug'].edge_label_index[:, n],
-            edge_label = self.subgraph['visit', 'drug'].edge_label[n],
-            mask = self.mask
         )
         print(f'Generated explanations in {self.explanation.available_explanations}')
 
