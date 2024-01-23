@@ -30,32 +30,32 @@ def stability(
         with torch.no_grad():
             # Clona i tensori e applica il rumore
             node_features_pert = {k: v.clone().detach() for k, v in node_features.items()}
-            if label_key == "drugs":
-                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'drug'].edge_label_index[:, n][0]].shape)
-                noise_drug = torch.normal(0, 0.01, node_features_pert['drug'][subgraph['visit', 'drug'].edge_label_index[:, n][1]].shape)
+            if label_key == "medications":
+                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'medication'].edge_label_index[:, n][0]].shape)
+                noise_drug = torch.normal(0, 0.01, node_features_pert['medication'][subgraph['visit', 'medication'].edge_label_index[:, n][1]].shape)
 
-                node_features_pert['visit'][subgraph['visit', 'drug'].edge_label_index[:, n][0]] += noise_visit
-                node_features_pert['drug'][subgraph['visit', 'drug'].edge_label_index[:, n][1]] += noise_drug
+                node_features_pert['visit'][subgraph['visit', 'medication'].edge_label_index[:, n][0]] += noise_visit
+                node_features_pert['medication'][subgraph['visit', 'medication'].edge_label_index[:, n][1]] += noise_drug
 
-            elif label_key == "conditions":
-                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'disease'].edge_label_index[:, n][0]].shape)
-                noise_disease = torch.normal(0, 0.01, node_features_pert['disease'][subgraph['visit', 'disease'].edge_label_index[:, n][1]].shape)
+            elif label_key == "diagnosis":
+                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][0]].shape)
+                noise_disease = torch.normal(0, 0.01, node_features_pert['diagnosis'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][1]].shape)
 
-                node_features_pert['visit'][subgraph['visit', 'disease'].edge_label_index[:, n][0]] += noise_visit
-                node_features_pert['disease'][subgraph['visit', 'disease'].edge_label_index[:, n][1]] += noise_disease
+                node_features_pert['visit'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][0]] += noise_visit
+                node_features_pert['diagnosis'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][1]] += noise_disease
 
         # Rewire edges
         num_nodes_visit = subgraph['visit'].num_nodes - 1
         num_rewire = 10
-        if label_key == "drugs":
-            num_nodes_label = subgraph['drug'].num_nodes - 1
+        if label_key == "medications":
+            num_nodes_label = subgraph['medication'].num_nodes - 1
             # Inizializza l'insieme dei bordi esistenti
-            existing_edges = list([tuple(edge) for edge in subgraph['visit', 'has_received', 'drug'].edge_index.t().tolist()])
+            existing_edges = list([tuple(edge) for edge in subgraph['visit', 'has_received', 'medication'].edge_index.t().tolist()])
 
-        elif label_key == "conditions":
-            num_nodes_label = subgraph['disease'].num_nodes - 1
+        elif label_key == "diagnosis":
+            num_nodes_label = subgraph['diagnosis'].num_nodes - 1
             # Inizializza l'insieme dei bordi esistenti
-            existing_edges = list([tuple(edge) for edge in subgraph['visit', 'has', 'disease'].edge_index.t().tolist()])
+            existing_edges = list([tuple(edge) for edge in subgraph['visit', 'has', 'diagnosis'].edge_index.t().tolist()])
 
         # Genera nuovi bordi
         new_edges = set()
@@ -76,13 +76,13 @@ def stability(
         perturbed_edge_index_dict = subgraph.edge_index_dict.copy()
 
         # Aggiorna l'indice degli archi per il tipo di relazione specifico con il nuovo indice degli archi
-        if label_key == "drugs":
-            perturbed_edge_index_dict[('visit', 'has_received', 'drug')] = perturbed_edge_index
-            edge_label_index = subgraph['visit', 'drug'].edge_label_index[:, n]
+        if label_key == "medications":
+            perturbed_edge_index_dict[('visit', 'has_received', 'medication')] = perturbed_edge_index
+            edge_label_index = subgraph['visit', 'medication'].edge_label_index[:, n]
 
-        elif label_key == "conditions":
-            perturbed_edge_index_dict[('visit', 'has', 'disease')] = perturbed_edge_index
-            edge_label_index = subgraph['visit', 'disease'].edge_label_index[:, n]
+        elif label_key == "diagnosis":
+            perturbed_edge_index_dict[('visit', 'has', 'diagnosis')] = perturbed_edge_index
+            edge_label_index = subgraph['visit', 'diagnosis'].edge_label_index[:, n]
 
         #print(perturbed_edge_index.edge_index_dict)
 
@@ -92,19 +92,19 @@ def stability(
             edge_label_index = edge_label_index,
         )
 
-        if label_key == "drugs":
-            ori_exp_mask = torch.zeros_like(explanation['visit', 'drug'].edge_mask)
-            ori_exp_mask[explanation['visit', 'drug'].edge_mask > 0] = 1
+        if label_key == "medications":
+            ori_exp_mask = torch.zeros_like(explanation['visit', 'medication'].edge_mask)
+            ori_exp_mask[explanation['visit', 'medication'].edge_mask > 0] = 1
 
-            pert_exp_mask = torch.zeros_like(pert_explanation['visit', 'drug'].edge_mask)
-            pert_exp_mask[pert_explanation['visit', 'drug'].edge_mask > 0] = 1
+            pert_exp_mask = torch.zeros_like(pert_explanation['visit', 'medication'].edge_mask)
+            pert_exp_mask[pert_explanation['visit', 'medication'].edge_mask > 0] = 1
 
-        elif label_key == "conditions":
-            ori_exp_mask = torch.zeros_like(explanation['visit', 'disease'].edge_mask)
-            ori_exp_mask[explanation['visit', 'disease'].edge_mask > 0] = 1
+        elif label_key == "diagnosis":
+            ori_exp_mask = torch.zeros_like(explanation['visit', 'diagnosis'].edge_mask)
+            ori_exp_mask[explanation['visit', 'diagnosis'].edge_mask > 0] = 1
 
-            pert_exp_mask = torch.zeros_like(pert_explanation['visit', 'disease'].edge_mask)
-            pert_exp_mask[pert_explanation['visit', 'disease'].edge_mask > 0] = 1
+            pert_exp_mask = torch.zeros_like(pert_explanation['visit', 'diagnosis'].edge_mask)
+            pert_exp_mask[pert_explanation['visit', 'diagnosis'].edge_mask > 0] = 1
 
         GES.append(1 - F.cosine_similarity(ori_exp_mask.reshape(1, -1), pert_exp_mask.reshape(1, -1)).item())
 

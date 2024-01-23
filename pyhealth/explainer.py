@@ -47,7 +47,7 @@ class HeteroGraphExplainer():
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.label_tokenizer = self.model.get_label_tokenizer()
 
-        self.proc_df, self.symp_df, self.drug_df, self.diag_df = self.get_dataframe()
+        self.proc_df, self.symp_df, self.medication_df, self.diag_df = self.get_dataframe()
 
         # dizionari dal modello
         self.hadm_dict = self.model.hadm_dict
@@ -108,14 +108,14 @@ class HeteroGraphExplainer():
 
     def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, 
                                      Union[None, Dict[str, pd.DataFrame]]]:
-        """Gets the dataframe of conditions, procedures, symptoms and drugs of patients.
+        """Gets the dataframe of diagnosis, procedures, symptoms and medications of patients.
 
         Returns:
             dataframe: a `pandas.DataFrame` object.
         """
         PROCEDURES = pd.DataFrame(columns=['SUBJECT_ID', 'HADM_ID', 'SEQ_NUM', 'ICD9_CODE'])
         SYMPTOMS = pd.DataFrame(columns=['SUBJECT_ID', 'HADM_ID', 'SEQ_NUM', 'ICD9_CODE'])
-        DRUGS = pd.DataFrame(columns=['SUBJECT_ID', 'HADM_ID', 'ATC_CODE'])
+        MEDICATIONS = pd.DataFrame(columns=['SUBJECT_ID', 'HADM_ID', 'ATC_CODE'])
         DIAGNOSES = pd.DataFrame(columns=['SUBJECT_ID', 'HADM_ID', 'SEQ_NUM', 'ICD9_CODE'])
 
 
@@ -140,18 +140,18 @@ class HeteroGraphExplainer():
                                         'ICD9_CODE': symptoms_data})
             SYMPTOMS = pd.concat([SYMPTOMS, symptoms_df], ignore_index=True)
 
-            if self.label_key == "drugs":
-                drugs_data = patient_data['drugs']
-                diagnoses_data = patient_data['conditions'][-1]
-            elif self.label_key == "conditions":
-                drugs_data = patient_data['drugs'][-1]
-                diagnoses_data = patient_data['conditions']
+            if self.label_key == "medications":
+                medications_data = patient_data['medications']
+                diagnoses_data = patient_data['diagnosis'][-1]
+            elif self.label_key == "diagnosis":
+                medications_data = patient_data['medications'][-1]
+                diagnoses_data = patient_data['diagnosis']
 
-            # DRUGS DataFrame
-            drugs_df = pd.DataFrame({'SUBJECT_ID': [subject_id] * len(drugs_data),
-                                    'HADM_ID': [hadm_id] * len(drugs_data),
-                                    'ATC_CODE': drugs_data})
-            DRUGS = pd.concat([DRUGS, drugs_df], ignore_index=True)
+            # MEDICATIONS DataFrame
+            medications_df = pd.DataFrame({'SUBJECT_ID': [subject_id] * len(medications_data),
+                                    'HADM_ID': [hadm_id] * len(medications_data),
+                                    'ATC_CODE': medications_data})
+            MEDICATIONS = pd.concat([MEDICATIONS, medications_df], ignore_index=True)
 
             # DIAGNOSES DataFrame
             diagnoses_df = pd.DataFrame({'SUBJECT_ID': [subject_id] * len(diagnoses_data),
@@ -160,17 +160,17 @@ class HeteroGraphExplainer():
                                         'ICD9_CODE': diagnoses_data})
             DIAGNOSES = pd.concat([DIAGNOSES, diagnoses_df], ignore_index=True)
 
-        return PROCEDURES, SYMPTOMS, DRUGS, DIAGNOSES
+        return PROCEDURES, SYMPTOMS, MEDICATIONS, DIAGNOSES
 
     def get_subgraph(self) -> HeteroData:
         """
-        Returns a subgraph containing selected patients, visits, symptoms, procedures and diseases.
+        Returns a subgraph containing selected patients, visits, symptoms, procedures and diagnosis.
 
         Returns:
             subgraph (HeteroData): A subgraph containing selected patients and visits.
         """
         # ==== DATA SELECTION ====
-        # Select the patients, visits, symptoms, procedures and diseases from the graph
+        # Select the patients, visits, symptoms, procedures and diagnosis from the graph
         self.symp_df['SUBJECT_ID'] = self.symp_df['SUBJECT_ID'].map(self.subject_dict)
         patient = self.symp_df["SUBJECT_ID"].unique()
         select_patient = torch.from_numpy(patient)
@@ -187,19 +187,19 @@ class HeteroGraphExplainer():
         procedure = self.proc_df["ICD9_CODE"].unique()
         select_procedure = torch.from_numpy(procedure)
  
-        if self.label_key == "drugs":
+        if self.label_key == "medications":
             self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
-            disease = self.diag_df["ICD9_CODE"].unique()
-            select_disease = torch.from_numpy(disease)
+            diagnosis = self.diag_df["ICD9_CODE"].unique()
+            select_diagnosis = torch.from_numpy(diagnosis)
 
-            subgraph = self.model.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "disease": select_disease})
+            subgraph = self.model.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "diagnosis": select_diagnosis})
 
-        elif self.label_key == "conditions":
-            self.drug_df['ATC_CODE'] = self.drug_df['ATC_CODE'].map(self.atc_pre_dict)
-            drug = self.drug_df["ATC_CODE"].unique()
-            select_drug = torch.from_numpy(drug)
+        elif self.label_key == "diagnosis":
+            self.medication_df['ATC_CODE'] = self.medication_df['ATC_CODE'].map(self.atc_pre_dict)
+            medication = self.medication_df["ATC_CODE"].unique()
+            select_medication = torch.from_numpy(medication)
 
-            subgraph = self.model.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "drug": select_drug})
+            subgraph = self.model.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "medication": select_medication})
 
         return subgraph
 
@@ -210,19 +210,19 @@ class HeteroGraphExplainer():
         Returns:
             HeteroData: The updated subgraph with negative samples.
         """
-        if self.label_key == "drugs":
-            neg_edges = negative_sampling(self.subgraph['visit', 'has_received', 'drug'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['drug'].num_nodes))
-            self.subgraph['visit', 'has_received', 'drug'].edge_label_index = self.subgraph['visit', 'has_received', 'drug'].edge_index
-            self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.ones(self.subgraph['visit', 'has_received', 'drug'].edge_label_index.shape[1], dtype=torch.float)
-            self.subgraph['visit', 'has_received', 'drug'].edge_label_index = torch.cat((self.subgraph['visit', 'has_received', 'drug'].edge_label_index, neg_edges), dim=1)
-            self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.cat((self.subgraph['visit', 'has_received', 'drug'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
+        if self.label_key == "medications":
+            neg_edges = negative_sampling(self.subgraph['visit', 'has_received', 'medication'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['medication'].num_nodes))
+            self.subgraph['visit', 'has_received', 'medication'].edge_label_index = self.subgraph['visit', 'has_received', 'medication'].edge_index
+            self.subgraph['visit', 'has_received', 'medication'].edge_label = torch.ones(self.subgraph['visit', 'has_received', 'medication'].edge_label_index.shape[1], dtype=torch.float)
+            self.subgraph['visit', 'has_received', 'medication'].edge_label_index = torch.cat((self.subgraph['visit', 'has_received', 'medication'].edge_label_index, neg_edges), dim=1)
+            self.subgraph['visit', 'has_received', 'medication'].edge_label = torch.cat((self.subgraph['visit', 'has_received', 'medication'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
 
-        elif self.label_key == "conditions":
-            neg_edges = negative_sampling(self.subgraph['visit', 'has', 'disease'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['disease'].num_nodes))
-            self.subgraph['visit', 'has', 'disease'].edge_label_index = self.subgraph['visit', 'has', 'disease'].edge_index
-            self.subgraph['visit', 'has', 'disease'].edge_label = torch.ones(self.subgraph['visit', 'has', 'disease'].edge_label_index.shape[1], dtype=torch.float)
-            self.subgraph['visit', 'has', 'disease'].edge_label_index = torch.cat((self.subgraph['visit', 'has', 'disease'].edge_label_index, neg_edges), dim=1)
-            self.subgraph['visit', 'has', 'disease'].edge_label = torch.cat((self.subgraph['visit', 'has', 'disease'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
+        elif self.label_key == "diagnosis":
+            neg_edges = negative_sampling(self.subgraph['visit', 'has', 'diagnosis'].edge_index, num_nodes=(self.subgraph['visit'].num_nodes, self.subgraph['diagnosis'].num_nodes))
+            self.subgraph['visit', 'has', 'diagnosis'].edge_label_index = self.subgraph['visit', 'has', 'diagnosis'].edge_index
+            self.subgraph['visit', 'has', 'diagnosis'].edge_label = torch.ones(self.subgraph['visit', 'has', 'diagnosis'].edge_label_index.shape[1], dtype=torch.float)
+            self.subgraph['visit', 'has', 'diagnosis'].edge_label_index = torch.cat((self.subgraph['visit', 'has', 'diagnosis'].edge_label_index, neg_edges), dim=1)
+            self.subgraph['visit', 'has', 'diagnosis'].edge_label = torch.cat((self.subgraph['visit', 'has', 'diagnosis'].edge_label, torch.zeros(neg_edges.shape[1], dtype=torch.float)), dim=0)
 
         return self.subgraph
 
@@ -233,35 +233,35 @@ class HeteroGraphExplainer():
         Returns:
             torch.Tensor: The generated mask.
         """
-        if self.label_key == "drugs":
-            mask = torch.ones_like(self.subgraph['visit', 'has_received', 'drug'].edge_label, dtype=torch.bool, device=self.device)
+        if self.label_key == "medications":
+            mask = torch.ones_like(self.subgraph['visit', 'has_received', 'medication'].edge_label, dtype=torch.bool, device=self.device)
 
             # Get all possible edges in the graph
             all_possible_edges = torch.cartesian_prod(torch.arange(self.subgraph['visit'].num_nodes), torch.arange(self.label_tokenizer.get_vocabulary_size()))
 
             # Filter existing edges in the current graph
-            existing_edges = self.subgraph['visit', 'has_received', 'drug'].edge_label_index.t().contiguous()
+            existing_edges = self.subgraph['visit', 'has_received', 'medication'].edge_label_index.t().contiguous()
 
             # Find missing edges in the current graph
             missing_edges = torch.tensor(list(set(map(tuple, all_possible_edges.tolist())) - set(map(tuple, existing_edges.tolist())))).t().contiguous()
 
-            self.subgraph['visit', 'has_received', 'drug'].edge_label_index = torch.cat([self.subgraph['visit', 'has_received', 'drug'].edge_label_index, missing_edges], dim=1)
-            self.subgraph['visit', 'has_received', 'drug'].edge_label = torch.cat([self.subgraph['visit', 'has_received', 'drug'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
+            self.subgraph['visit', 'has_received', 'medication'].edge_label_index = torch.cat([self.subgraph['visit', 'has_received', 'medication'].edge_label_index, missing_edges], dim=1)
+            self.subgraph['visit', 'has_received', 'medication'].edge_label = torch.cat([self.subgraph['visit', 'has_received', 'medication'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
 
-        elif self.label_key == "conditions":
-            mask = torch.ones_like(self.subgraph['visit', 'has', 'disease'].edge_label, dtype=torch.bool, device=self.device)
+        elif self.label_key == "diagnosis":
+            mask = torch.ones_like(self.subgraph['visit', 'has', 'diagnosis'].edge_label, dtype=torch.bool, device=self.device)
 
             # Get all possible edges in the graph
             all_possible_edges = torch.cartesian_prod(torch.arange(self.subgraph['visit'].num_nodes), torch.arange(self.label_tokenizer.get_vocabulary_size()))
 
             # Filter existing edges in the current graph
-            existing_edges = self.subgraph['visit', 'has', 'disease'].edge_label_index.t().contiguous()
+            existing_edges = self.subgraph['visit', 'has', 'diagnosis'].edge_label_index.t().contiguous()
 
             # Find missing edges in the current graph
             missing_edges = torch.tensor(list(set(map(tuple, all_possible_edges.tolist())) - set(map(tuple, existing_edges.tolist())))).t().contiguous()
 
-            self.subgraph['visit', 'has', 'disease'].edge_label_index = torch.cat([self.subgraph['visit', 'has', 'disease'].edge_label_index, missing_edges], dim=1)
-            self.subgraph['visit', 'has', 'disease'].edge_label = torch.cat([self.subgraph['visit', 'has', 'disease'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
+            self.subgraph['visit', 'has', 'diagnosis'].edge_label_index = torch.cat([self.subgraph['visit', 'has', 'diagnosis'].edge_label_index, missing_edges], dim=1)
+            self.subgraph['visit', 'has', 'diagnosis'].edge_label = torch.cat([self.subgraph['visit', 'has', 'diagnosis'].edge_label, torch.zeros(missing_edges.size(1), dtype=torch.float)], dim=0)
 
         # Extend the mask with False for missing edges
         mask = torch.cat([mask, torch.zeros(missing_edges.size(1), dtype=torch.bool, device=self.device)], dim=0)
@@ -273,11 +273,11 @@ class HeteroGraphExplainer():
         n: int
     ):
         self.n = n
-        if self.label_key == "drugs":
-            edge_label_index = self.subgraph['visit', 'drug'].edge_label_index[:, n]
+        if self.label_key == "medications":
+            edge_label_index = self.subgraph['visit', 'medication'].edge_label_index[:, n]
 
-        elif self.label_key == "conditions":
-            edge_label_index = self.subgraph['visit', 'disease'].edge_label_index[:, n]
+        elif self.label_key == "diagnosis":
+            edge_label_index = self.subgraph['visit', 'diagnosis'].edge_label_index[:, n]
 
         self.explanation =self.explainer(
             x = self.node_features,
@@ -293,13 +293,13 @@ class HeteroGraphExplainer():
         self.explanation['prediction'] = F.sigmoid(self.explanation['prediction'])
 
         print(f"Feature importance plot has been saved to '{path}'")
-        if self.label_key == "drugs":
-            print('Edge to predict: ' + str(self.subgraph['visit', 'drug'].edge_label_index[:, n]))
-            print('Label to predict: ' + str(self.subgraph['visit', 'drug'].edge_label[n].cpu().numpy().astype(int)))
+        if self.label_key == "medications":
+            print('Edge to predict: ' + str(self.subgraph['visit', 'medication'].edge_label_index[:, n]))
+            print('Label to predict: ' + str(self.subgraph['visit', 'medication'].edge_label[n].cpu().numpy().astype(int)))
 
-        elif self.label_key == "conditions":
-            print('Edge to predict: ' + str(self.subgraph['visit', 'disease'].edge_label_index[:, n]))
-            print('Label to predict: ' + str(self.subgraph['visit', 'disease'].edge_label[n].cpu().numpy().astype(int)))
+        elif self.label_key == "diagnosis":
+            print('Edge to predict: ' + str(self.subgraph['visit', 'diagnosis'].edge_label_index[:, n]))
+            print('Label to predict: ' + str(self.subgraph['visit', 'diagnosis'].edge_label[n].cpu().numpy().astype(int)))
 
         print('Label predicted: ' + str(1 if self.explanation['prediction'].cpu().numpy() > 0.5 else 0) + 
               " because " + str(self.explanation['prediction'].cpu().numpy()))
@@ -325,8 +325,8 @@ class HeteroGraphExplainer():
             'visit': '#fa8072',    # salmon
             'symptom': '#98fb98',  # pale green
             'procedure': '#da70d6', # orchid
-            'disease': '#cd853f',  # peru
-            'drug': '#87ceeb',      # sky blue
+            'diagnosis': '#cd853f',  # peru
+            'medication': '#87ceeb',      # sky blue
         }
         if k >= 2:
             node_colors['anatomy'] = '#bc8f8f'  # rosy brown
@@ -337,13 +337,13 @@ class HeteroGraphExplainer():
             ('patient', 'visit'): '#20b2aa',
             ('visit', 'symptom'): '#98fb98',
             ('visit', 'procedure'): '#da70d6',
-            ('visit', 'disease'): '#cd853f',
-            ('visit', 'drug'): '#87ceeb',
+            ('visit', 'diagnosis'): '#cd853f',
+            ('visit', 'medication'): '#87ceeb',
             ('visit', 'patient'): '#20b2aa',
             ('symptom', 'visit'): '#98fb98',
             ('procedure', 'visit'): '#da70d6',
-            ('disease', 'visit'): '#cd853f',
-            ('drug', 'visit'): '#87ceeb',
+            ('diagnosis', 'visit'): '#cd853f',
+            ('medication', 'visit'): '#87ceeb',
         }
         if k >= 2:
             edge_colors[('visit', 'anatomy')] = '#bc8f8f'
@@ -378,19 +378,19 @@ class HeteroGraphExplainer():
                                 node_size = max(10, node_mask.max().item() * 20)
                                 self.G.add_node(procedure_icd, type=node_type, size=node_size)
 
-                            elif node_type_d == "disease":
-                                disease_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
-                                print(f"{node_type} {id} {disease_icd} Importance: " + str(node_mask.max()))
+                            elif node_type_d == "diagnosis":
+                                diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
+                                print(f"{node_type} {id} {diagnosis_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
-                                self.G.add_node(disease_icd, type=node_type, size=node_size)
+                                self.G.add_node(diagnosis_icd, type=node_type, size=node_size)
 
-                            elif node_type_d == "drug":
-                                drug_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
-                                print(f"{node_type} {id} {drug_atc} Importance: " + str(node_mask.max()))
+                            elif node_type_d == "medication":
+                                medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
+                                print(f"{node_type} {id} {medication_atc} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
-                                self.G.add_node(drug_atc, type=node_type, size=node_size)
+                                self.G.add_node(medication_atc, type=node_type, size=node_size)
 
                             # if k >= 2:
                             #     if node_type_d == "anatomy":
@@ -445,13 +445,13 @@ class HeteroGraphExplainer():
                             procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id_s)])
                             source_id = procedure_icd
 
-                        elif source_id_d == "disease":
-                            disease_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id_s)])
-                            source_id = disease_icd
+                        elif source_id_d == "diagnosis":
+                            diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id_s)])
+                            source_id = diagnosis_icd
 
-                        elif source_id_d == "drug":
-                            drug_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id_s)])
-                            source_id = drug_atc
+                        elif source_id_d == "medication":
+                            medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id_s)])
+                            source_id = medication_atc
 
                         elif source_id_d == "patient":
                             source_id = source_id
@@ -468,13 +468,13 @@ class HeteroGraphExplainer():
                             procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id_t)])
                             target_id = procedure_icd
 
-                        elif target_id_d == "disease":
-                            disease_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id_t)])
-                            target_id = disease_icd
+                        elif target_id_d == "diagnosis":
+                            diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id_t)])
+                            target_id = diagnosis_icd
 
-                        elif target_id_d == "drug":
-                            drug_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id_t)])
-                            target_id = drug_atc
+                        elif target_id_d == "medication":
+                            medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id_t)])
+                            target_id = medication_atc
 
                         elif target_id_d == "patient":
                             target_id = target_id
@@ -550,42 +550,42 @@ class HeteroGraphExplainer():
 
         for metric in metrics:
             if metric == "Fidelity":
-                if self.label_key == "drugs":
+                if self.label_key == "medications":
                     pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, 
-                                                        self.subgraph['visit', 'drug'].edge_label_index, 
-                                                        self.subgraph['visit', 'drug'].edge_label)
+                                                        self.subgraph['visit', 'medication'].edge_label_index, 
+                                                        self.subgraph['visit', 'medication'].edge_label)
 
-                elif self.label_key == "conditions":
+                elif self.label_key == "diagnosis":
                     pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, 
-                                                        self.subgraph['visit', 'disease'].edge_label_index, 
-                                                        self.subgraph['visit', 'disease'].edge_label)
+                                                        self.subgraph['visit', 'diagnosis'].edge_label_index, 
+                                                        self.subgraph['visit', 'diagnosis'].edge_label)
                 print("Fidelity Positive: " + str(float(pos_fidelity)))
                 print("Fidelity Negative: " + str(float(neg_fidelity)))
 
             elif metric == "Fidelity_F1":
-                if self.label_key == "drugs":
+                if self.label_key == "medications":
                     pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, 
-                                                        self.subgraph['visit', 'drug'].edge_label_index, 
-                                                        self.subgraph['visit', 'drug'].edge_label)
+                                                        self.subgraph['visit', 'medication'].edge_label_index, 
+                                                        self.subgraph['visit', 'medication'].edge_label)
 
-                elif self.label_key == "conditions":
+                elif self.label_key == "diagnosis":
                     pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, 
-                                                        self.subgraph['visit', 'disease'].edge_label_index, 
-                                                        self.subgraph['visit', 'disease'].edge_label)
+                                                        self.subgraph['visit', 'diagnosis'].edge_label_index, 
+                                                        self.subgraph['visit', 'diagnosis'].edge_label)
                 score = (2 * pos_fidelity * (1-neg_fidelity)) / (pos_fidelity + (1-neg_fidelity))
                 print("Fidelity (weighted): " + str(score))
 
             elif metric == "Unfaithfulness":
-                if self.label_key == "drugs":
+                if self.label_key == "medications":
                     unfaithfulness_score = unfaithfulness(explainer, explanation, self.subgraph, self.node_features, 
-                                                        self.subgraph['visit', 'drug'].edge_label_index, 
-                                                        self.subgraph['visit', 'drug'].edge_label,
+                                                        self.subgraph['visit', 'medication'].edge_label_index, 
+                                                        self.subgraph['visit', 'medication'].edge_label,
                                                         top_k=self.feat_size)
 
-                elif self.label_key == "conditions":
+                elif self.label_key == "diagnosis":
                     unfaithfulness_score = unfaithfulness(explainer, explanation, self.subgraph, self.node_features, 
-                                                        self.subgraph['visit', 'disease'].edge_label_index, 
-                                                        self.subgraph['visit', 'disease'].edge_label,
+                                                        self.subgraph['visit', 'diagnosis'].edge_label_index, 
+                                                        self.subgraph['visit', 'diagnosis'].edge_label,
                                                         top_k=self.feat_size)
                 print("Unfaithfulness Score: " + str(unfaithfulness_score))
 
@@ -610,68 +610,66 @@ class HeteroGraphExplainer():
         icdpr = InnerMap.load("ICD9PROC")
         atc = InnerMap.load("ATC")
 
-        if self.label_key == "drugs":
-            visit_id = self.subgraph['visit', 'has_received', 'drug'].edge_label_index[:, n][0].item()
-            drug_id = self.subgraph['visit', 'has_received', 'drug'].edge_label_index[:, n][1].item()
+        if self.label_key == "medications":
+            visit_id = self.subgraph['visit', 'has_received', 'medication'].edge_label_index[:, n][0].item()
+            medication_id = self.subgraph['visit', 'has_received', 'medication'].edge_label_index[:, n][1].item()
         elif self.label_key == "diagnoses":
-            visit_id = self.subgraph['visit', 'has', 'disease'].edge_label_index[:, n][0].item()
-            diagnosis_id = self.subgraph['visit', 'has', 'disease'].edge_label_index[:, n][1].item()
+            visit_id = self.subgraph['visit', 'has', 'diagnosis'].edge_label_index[:, n][0].item()
+            diagnosis_id = self.subgraph['visit', 'has', 'diagnosis'].edge_label_index[:, n][1].item()
 
         prompt_recruiter_doctors = """"""
-        prompt_primary_doctor = """"""
+        prompt_internist_doctor = """"""
 
         if doctor_type == "Doctor_Recruiter":
             # Create dynamic text
-            if self.label_key == "drugs":
+            if self.label_key == "medications":
                 # Prescription decision
                 if self.explanation['prediction'].numpy() > 0.5:
                     prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
-                    prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the administration of the drug:"""
-                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}" at visit {visit_id} and on the patient's condition"""
+                    prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the administration of the medication:"""
+                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                 else:
                     prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
-                    prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-administration of the drug:"""
-                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}" at visit {visit_id} and on the patient's condition"""
+                    prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-administration of the medication:"""
+                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
-            elif self.label_key == "conditions":
+            elif self.label_key == "diagnosis":
                 # Prescription decision
                 if self.explanation['prediction'].numpy() > 0.5:
                     prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                     prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the prediction of the diagnosis:"""
-                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}" at visit {visit_id}."""
+                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                 else:
                     prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                     prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-prediction of the diagnosis:"""
-                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])}" at visit {visit_id}."""
+                    prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
-        elif doctor_type == "Primary_Doctor":
+        elif doctor_type == "Internist_Doctor":
 
-            if self.label_key == "drugs":
+            if self.label_key == "medications":
                 # Prescription decision
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_primary_doctor += f"""You are an expert in understanding the connection between the recommendation provided by the system and the patient's medical scenario in the visit and in determining its compatibility. \n"""
-                    prompt_primary_doctor += f"""Your task, in particular, is to analyse the scenario with your medical knowledge and to assess the relevance and correctness of the drug administration hypothesis. \n"""
+                    prompt_internist_doctor += f"""Your task is to explain why the system recommended medication {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])} at visit {visit_id} by analysing the scenario with your medical knowledge and to assess the RELEVANCE and CORRECTNESS of the medication hypothesis. \n"""
 
                 else:
-                    prompt_primary_doctor += f"""You are an expert in understanding the connection between the recommendation provided by the system and the patient's medical scenario in the visit and in determining its compatibility.\n"""
-                    prompt_primary_doctor += f"""Your task, in particular, is to analyse the scenario with your medical knowledge and to assess the relevance and correctness of the NON-administration of the drug hypothesis. \n"""
+                    prompt_internist_doctor += f"""Your task is to explain why the system NOT recommended medication {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])} at visit {visit_id} by analysing the scenario with your medical knowledge and to assess the RELEVANCE and CORRECTNESS of the medication hypothesis. \n"""
 
-            elif self.label_key == "conditions":
+            elif self.label_key == "diagnosis":
                 # Prescription decision
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_primary_doctor += f"""You are an expert in understanding the connection between the recommendation provided by the system and the patient's medical scenario in the visit and in determining its compatibility. \n"""
-                    prompt_primary_doctor += f"""Your task, in particular, is to analyse the scenario with your medical knowledge and to assess the relevance and correctness of the diagnosis prediction hypothesis. \n"""
+                    prompt_internist_doctor += f"""You are an expert in understanding the connection between the recommendation provided by the system and the patient's medical scenario in the visit and in determining its compatibility. \n"""
+                    prompt_internist_doctor += f"""Your task, in particular, is to analyse the scenario with your medical knowledge and to assess the RELEVANCE and CORRECTNESS of the diagnosis prediction hypothesis. \n"""
 
                 else:
-                    prompt_primary_doctor += f"""You are an expert in understanding the connection between the recommendation provided by the system and the patient's medical scenario in the visit and in determining its compatibility.\n"""
-                    prompt_primary_doctor += f"""Your task, in particular, is to analyse the scenario with your medical knowledge and to assess the relevance and correctness of the NON-prediction of the diagnosis hypothesis. \n"""
+                    prompt_internist_doctor += f"""You are an expert in understanding the connection between the recommendation provided by the system and the patient's medical scenario in the visit and in determining its compatibility. \n"""
+                    prompt_internist_doctor += f"""Your task, in particular, is to analyse the scenario with your medical knowledge and to assess the RELEVANCE and CORRECTNESS of the NON-prediction of the diagnosis hypothesis. \n"""
 
         symptoms = []
         procedures = []
-        diseases = []
-        drugs = []
+        diagnosis = []
+        medications = []
 
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
@@ -690,35 +688,35 @@ class HeteroGraphExplainer():
                                 symptoms.append(target_id)
                             elif target == "procedure":
                                 procedures.append(target_id)
-                            elif target == "disease":
-                                diseases.append(target_id)
-                            elif target == "drug":
-                                if tgt_id != str(drug_id):
-                                    drugs.append(target_id)
+                            elif target == "diagnosis":
+                                diagnosis.append(target_id)
+                            elif target == "medication":
+                                if tgt_id != str(medication_id):
+                                    medications.append(target_id)
 
                         elif target == "visit" and tgt_id == str(visit_id):
                             if source == "symptom":
                                 symptoms.append(source_id)
                             elif source == "procedure":
                                 procedures.append(source_id)
-                            elif source == "disease":
-                                diseases.append(source_id)
-                            elif source == "drug":
-                                if src_id != str(drug_id):
-                                    drugs.append(source_id)
+                            elif source == "diagnosis":
+                                diagnosis.append(source_id)
+                            elif source == "medication":
+                                if src_id != str(medication_id):
+                                    medications.append(source_id)
                                 
 
         symptoms = sorted(set(symptoms), key=lambda x: self.nodess[x], reverse=True)
         procedures = sorted(set(procedures), key=lambda x: self.nodess[x], reverse=True)
-        diseases = sorted(set(diseases), key=lambda x: self.nodess[x], reverse=True)
-        drugs = sorted(set(drugs), key=lambda x: self.nodess[x], reverse=True)
+        diagnosis = sorted(set(diagnosis), key=lambda x: self.nodess[x], reverse=True)
+        medications = sorted(set(medications), key=lambda x: self.nodess[x], reverse=True)
 
-        prompt_recruiter_doctors += f"\n\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
-        prompt_primary_doctor += f"\n\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
+        prompt_recruiter_doctors += f"\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
+        prompt_internist_doctor += f"\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
 
         # List of symptoms presented by the patient
-        prompt_recruiter_doctors += 'Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n'
-        prompt_primary_doctor += 'Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n'
+        prompt_recruiter_doctors += f"Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n"
+        prompt_internist_doctor += f"Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n"
 
         for symptom in symptoms:
             node_type, id = str(symptom).split('_')
@@ -726,13 +724,13 @@ class HeteroGraphExplainer():
                 symptom_icd = icd.lookup(list(self.icd9_symp_dict.keys())[int(id)])
                 if doctor_type == "Doctor_Recruiter":
                     prompt_recruiter_doctors += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
-                elif doctor_type == "Primary_Doctor":
-                    prompt_primary_doctor += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
+                elif doctor_type == "Internist_Doctor":
+                    prompt_internist_doctor += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
 
 
         # List of procedures performed on the patient
-        prompt_recruiter_doctors += '\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n'
-        prompt_primary_doctor += '\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n'
+        prompt_recruiter_doctors += f"\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n"
+        prompt_internist_doctor += f"\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n"
 
         for procedure in procedures:
             node_type, id = str(procedure).split('_')
@@ -740,42 +738,42 @@ class HeteroGraphExplainer():
                 procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id)])
                 if doctor_type == "Doctor_Recruiter":
                     prompt_recruiter_doctors += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
-                elif doctor_type == "Primary_Doctor":
-                    prompt_primary_doctor += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
+                elif doctor_type == "Internist_Doctor":
+                    prompt_internist_doctor += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
 
 
         # List of patient's diagnoses
-        prompt_recruiter_doctors += '\nPatient diagnoses important from the system (ordered by level of importance):\n\n'
-        prompt_primary_doctor += '\nPatient diagnoses important from the system (ordered by level of importance):\n\n'
+        prompt_recruiter_doctors += f"\nPatient diagnoses important from the system (ordered by level of importance):\n\n"
+        prompt_internist_doctor += f"\nPatient diagnoses important from the system (ordered by level of importance):\n\n"
 
-        for disease in diseases:
-            node_type, id = str(disease).split('_')
-            if node_type == "disease":
-                disease_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
+        for diagnosis in diagnosis:
+            node_type, id = str(diagnosis).split('_')
+            if node_type == "diagnosis":
+                diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
                 if doctor_type == "Doctor_Recruiter":
-                    prompt_recruiter_doctors += "- " + disease_icd + " - Importance level: " + str(round(self.nodess[disease], 4)) + "\n"
-                elif doctor_type == "Primary_Doctor":
-                    prompt_primary_doctor += "- " + disease_icd + " - Importance level: " + str(round(self.nodess[disease], 4)) + "\n"
+                    prompt_recruiter_doctors += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
+                elif doctor_type == "Internist_Doctor":
+                    prompt_internist_doctor += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
 
 
-        # List of drugs administered to the patient
-        prompt_recruiter_doctors += '\nDrugs already administered to the patient found important from the system (ordered by level of importance):\n\n'
-        prompt_primary_doctor += '\nDrugs already administered to the patient found important from the system (ordered by level of importance):\n\n'
+        # List of medications administered to the patient
+        prompt_recruiter_doctors += f"\nMedications already administered to the patient found important from the system (ordered by level of importance):\n\n"
+        prompt_internist_doctor += f"\nMedications already administered to the patient found important from the system (ordered by level of importance):\n\n"
 
-        for drug in drugs:
-            node_type, id = str(drug).split('_')
-            if node_type == "drug":
-                drug_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
+        for medication in medications:
+            node_type, id = str(medication).split('_')
+            if node_type == "medication":
+                medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
                 if doctor_type == "Doctor_Recruiter":
-                    prompt_recruiter_doctors += "- " + drug_atc + " - Importance level: " + str(round(self.nodess[drug], 4)) + "\n"
-                elif doctor_type == "Primary_Doctor":
-                    prompt_primary_doctor += "- " +drug_atc + " - Importance level: " + str(round(self.nodess[drug], 4)) + "\n"
+                    prompt_recruiter_doctors += "- " + medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
+                elif doctor_type == "Internist_Doctor":
+                    prompt_internist_doctor += "- " +medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
 
-        if self.label_key == "drugs":
+        if self.label_key == "medications":
             if doctor_type == "Doctor_Recruiter":
                 prompt_recruiter_doctors += f"""\nFor each doctor in the JSON file, include:"""
                 prompt_recruiter_doctors += f"""\n- 'role': 'Specify medical speciality'"""
-                prompt_recruiter_doctors += f"""\n- 'description': 'You are a [role identified] with expertise in [describe skills]"""
+                prompt_recruiter_doctors += f"""\n- 'description': 'You are a [role identified] with expertise in [describe skills]'"""
                 prompt_recruiter_doctors += f"""\n\nThe structure of the JSON:\n'doctors': [\n\t'role': \n\t'description': \n]"""
 
                 print(prompt_recruiter_doctors)
@@ -784,32 +782,24 @@ class HeteroGraphExplainer():
 
                 return prompt_recruiter_doctors
 
-            elif doctor_type == "Primary_Doctor":
+            elif doctor_type == "Internist_Doctor":
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_primary_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. \n"""
-                    prompt_primary_doctor += f"""The drug recommendation system recommended the drug: {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])} at visit {visit_id} of the scenario. \n"""
-                    prompt_primary_doctor += f"""Provide a 75-word summary of whether the drug is justifiable or unjustifiable taking into account the levels of importance and the correlations between the conditions and the drug administered. \n"""
-                    prompt_primary_doctor += f"""If unjustifiable, highlight the negative aspects; if justifiable, emphasise the positive aspects. \n"""
-                    prompt_primary_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the drug but with further analysis may reveal connections with other conditions that justify the recommendation. \n"""
+                    prompt_internist_doctor += f"""Provide a summary of MAX 75 words explaining why the drug is JUSTIFIABLE by highlighting the positive and negative aspects of the conditions supporting this recommendation. Please note, if in the medical scenario there is no correlation between the condition and the drug to be recommended, explain why the recommendation is UNJUSTIFIABLE."""
 
                 else:
-                    prompt_primary_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. \n"""
-                    prompt_primary_doctor += f"""The drug recommendation system NON-recommended the drug: {atc.lookup(list(self.atc_pre_dict.keys())[int(drug_id)])} at visit {visit_id} of the scenario. \n"""
-                    prompt_primary_doctor += f"""Provide a 75-word summary of whether the drug is justifiable or unjustifiable taking into account the levels of importance and the correlations between the conditions and the drug NOT administered. \n"""
-                    prompt_primary_doctor += f"""If unjustifiable, highlight the negative aspects; if justifiable, emphasise the positive aspects. \n"""
-                    prompt_primary_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the drug but with further analysis may reveal connections with other conditions that justify the recommendation. \n"""
+                    prompt_internist_doctor += f"""Provide a summary of MAX 75 words explaining why the drug is UNJUSTIFIABLE by highlighting the positive and negative aspects of the conditions supporting this recommendation. Please note, if in the medical scenario there is correlation between the condition and the drug to be recommended, explain why the recommendation is JUSTIFIABLE."""
 
-                print(prompt_primary_doctor)
-                with open(f'{self.root}prompt_primary_doctor.txt', 'w') as file:
-                    file.write(prompt_primary_doctor)
+                print(prompt_internist_doctor)
+                with open(f'{self.root}prompt_internist_doctor.txt', 'w') as file:
+                    file.write(prompt_internist_doctor)
 
-                return prompt_primary_doctor
+                return prompt_internist_doctor
 
-        elif self.label_key == "conditions":
+        elif self.label_key == "diagnosis":
             if doctor_type == "Doctor_Recruiter":
                 prompt_recruiter_doctors += f"""For each doctor in the JSON file, include: """
                 prompt_recruiter_doctors += f"""\n- 'role': 'Specify medical speciality'"""
-                prompt_recruiter_doctors += f"""\n- 'description': 'You are a [role identified] with expertise in [describe skills]"""
+                prompt_recruiter_doctors += f"""\n- 'description': 'You are a [role identified] with expertise in [describe skills]'"""
                 prompt_recruiter_doctors += f"""\n\nThe structure of the JSON:\n'doctors': [\n\t'role': \n\t'description': \n]"""
 
                 print(prompt_recruiter_doctors)
@@ -818,23 +808,23 @@ class HeteroGraphExplainer():
 
                 return prompt_recruiter_doctors
 
-            elif doctor_type == "Primary_Doctor":
+            elif doctor_type == "Internist_Doctor":
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_primary_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. \n """
-                    prompt_primary_doctor += f"""The diagnosis prediction system recommended the diagnosis: {icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])} at visit {visit_id} of the scenario. \n"""
-                    prompt_primary_doctor += f"""Provide a 75-word summary of whether the drug is justifiable or unjustifiable taking into account the levels of importance and the correlations between the conditions and the diagnosis predicted. \n"""
-                    prompt_primary_doctor += f"""If unjustifiable, highlight the negative aspects; if justifiable, emphasise the positive aspects. \n"""
-                    prompt_primary_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the drug but with further analysis may reveal connections with other conditions that justify the recommendation. \n"""
+                    prompt_internist_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. The diagnosis prediction system recommended the diagnosis: \n"""
+                    prompt_internist_doctor += f"""{icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])} at visit {visit_id} of the scenario. \n"""
+                    prompt_internist_doctor += f"""Provide a 75-word summary of whether the medication is JUSTIFIABLE or UNJUSTIFIABLE taking into account the levels of importance and the correlations between the conditions and the diagnosis predicted."""
+                    prompt_internist_doctor += f""" If UNJUSTIFIABLE, highlight the negative aspects; if JUSTIFIABLE, emphasise the positive aspects. \n"""
+                    prompt_internist_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the medication but with further analysis may reveal connections with other conditions that justify the recommendation."""
 
                 else:
-                    prompt_primary_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. \n """
-                    prompt_primary_doctor += f"""The diagnosis prediction system recommended the diagnosis: {icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])} at visit {visit_id} of the scenario. \n"""
-                    prompt_primary_doctor += f"""Provide a 75-word summary of whether the drug is justifiable or unjustifiable taking into account the levels of importance and the correlations between the conditions and the diagnosis NOT predicted. \n"""
-                    prompt_primary_doctor += f"""If unjustifiable, highlight the negative aspects; if justifiable, emphasise the positive aspects. \n"""
-                    prompt_primary_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the drug but with further analysis may reveal connections with other conditions that justify the recommendation. \n"""
+                    prompt_internist_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. The diagnosis prediction system recommended the diagnosis: \n"""
+                    prompt_internist_doctor += f"""{icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])} at visit {visit_id} of the scenario. \n"""
+                    prompt_internist_doctor += f"""Provide a 75-word summary of whether the medication is JUSTIFIABLE or UNJUSTIFIABLE taking into account the levels of importance and the correlations between the conditions and the diagnosis NOT predicted."""
+                    prompt_internist_doctor += f""" If UNJUSTIFIABLE, highlight the negative aspects; if JUSTIFIABLE, emphasise the positive aspects. \n"""
+                    prompt_internist_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the medication but with further analysis may reveal connections with other conditions that justify the recommendation."""
 
-                print(prompt_primary_doctor)
-                with open(f'{self.root}prompt_primary_doctor.txt', 'w') as file:
-                    file.write(prompt_primary_doctor)
+                print(prompt_internist_doctor)
+                with open(f'{self.root}prompt_internist_doctor.txt', 'w') as file:
+                    file.write(prompt_internist_doctor)
 
-                return prompt_primary_doctor
+                return prompt_internist_doctor
