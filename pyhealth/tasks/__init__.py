@@ -1,8 +1,8 @@
-from .drug_recommendation import (
-    drug_recommendation_eicu_fn,
-    drug_recommendation_mimic3_fn,
-    drug_recommendation_mimic4_fn,
-    drug_recommendation_omop_fn,
+from .medication_recommendation import (
+    medication_recommendation_eicu_fn,
+    medication_recommendation_mimic3_fn,
+    medication_recommendation_mimic4_fn,
+    medication_recommendation_omop_fn,
 )
 from .diagnosis_prediction import (
     diagnosis_prediction_mimic3_fn,

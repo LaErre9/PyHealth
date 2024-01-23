@@ -5,7 +5,7 @@ def diagnosis_prediction_mimic3_fn(patient: Patient):
     """Processes a single patient for the diagnosis prediction task.
 
     Diagnosis prediction aims at predict a set of diagnosis given the patient health
-    history  (e.g., symptoms, procedures and drugs).
+    history  (e.g., symptoms, procedures and medications).
 
     Args:
         patient: a Patient object
@@ -16,36 +16,36 @@ def diagnosis_prediction_mimic3_fn(patient: Patient):
             {
                 "patient_id": xxx,
                 "visit_id": xxx,
-                "conditions": [list of diag in visit N], # this is the predicted target 
+                "diagnosis": [list of diag in visit N], # this is the predicted target 
                 "procedures": [list of prod in visit 1, list of prod in visit 2, ..., list of prod in visit N],
                 "symptoms": [list of symptom in visit 1, list of symptom in visit 2, ..., list of symptom in visit N],
-                "drugs": [list of drug in visit 1, list of drug in visit 2, ..., list of drug in visit N]
+                "medications": [list of medication in visit 1, list of medication in visit 2, ..., list of medication in visit N]
             }
     """
     samples = []
     for i in range(len(patient)):
         visit: Visit = patient[i]
-        conditions = visit.get_code_list(table="DIAGNOSES_ICD")
+        diagnosis = visit.get_code_list(table="DIAGNOSES_ICD")
         procedures = visit.get_code_list(table="PROCEDURES_ICD")
-        drugs = visit.get_code_list(table="PRESCRIPTIONS")
+        medications = visit.get_code_list(table="PRESCRIPTIONS")
         symptoms = visit.get_code_list(table='NOTEEVENTS_ICD')
 
         # ATC 3 level
-        drugs = [drug[:4] for drug in drugs]
-        # Conditions 3 level
-        conditions = [condition[:3] for condition in conditions]
-        # exclude: visits without condition, procedure, or drug code
-        if len(conditions) * len(procedures) * len(drugs) * len(symptoms) == 0:
+        medications = [medication[:4] for medication in medications]
+        # Diagnosis 3 level
+        diagnosis = [condition[:3] for condition in diagnosis]
+        # exclude: visits without condition, procedure, or medication code
+        if len(diagnosis) * len(procedures) * len(medications) * len(symptoms) == 0:
             continue
         # TODO: should also exclude visit with age < 18
         samples.append(
             {
                 "visit_id": visit.visit_id,
                 "patient_id": patient.patient_id,
-                "conditions": conditions,
+                "diagnosis": diagnosis,
                 "procedures": procedures,
                 "symptoms": symptoms,
-                "drugs": drugs,
+                "medications": medications,
             }
         )
     # exclude: patients with less than 2 visit
@@ -55,7 +55,7 @@ def diagnosis_prediction_mimic3_fn(patient: Patient):
     # add history
     samples[0]["procedures"] = [samples[0]["procedures"]]
     samples[0]["symptoms"] = [samples[0]["symptoms"]]
-    samples[0]["drugs"] = [samples[0]["drugs"]]
+    samples[0]["medications"] = [samples[0]["medications"]]
     
 
     for i in range(1, len(samples)):
@@ -65,8 +65,8 @@ def diagnosis_prediction_mimic3_fn(patient: Patient):
         samples[i]["symptoms"] = samples[i - 1]["symptoms"] + [
             samples[i]["symptoms"]
         ]
-        samples[i]["drugs"] = samples[i - 1]["drugs"] + [
-            samples[i]["drugs"]
+        samples[i]["medications"] = samples[i - 1]["medications"] + [
+            samples[i]["medications"]
         ]
 
 
