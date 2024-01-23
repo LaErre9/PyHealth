@@ -78,7 +78,7 @@ class HeteroGraphExplainer():
                                                  )
             type_returned = "probs"
         elif self.algorithm == "GNNExplainer":
-            explainer_algorithm = GNNExplainer(epochs=300,
+            explainer_algorithm = GNNExplainer(epochs=100,
                                                lr=0.2,
                                                )
             type_returned = "raw"
@@ -651,11 +651,17 @@ class HeteroGraphExplainer():
             if self.label_key == "medications":
                 # Prescription decision
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_internist_doctor += f"""Your task is to explain why the system recommended medication {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])} at visit {visit_id} by analysing the scenario with your medical knowledge and to assess the RELEVANCE and CORRECTNESS of the medication hypothesis. \n"""
-
+                    prompt_internist_doctor += f"""Analyse the medical scenario of Visit {visit_id}, in which the system recommended: {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}. \n"""
+                    prompt_internist_doctor += f"""Use medical experience to clarify the rationale behind this recommendation and critically evaluate its RELEVANCE and CORRECTNESS. \n"""
+                    prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the recommended medication, emphasising key factors. \n"""
+                    prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis."""
+                    
                 else:
-                    prompt_internist_doctor += f"""Your task is to explain why the system NOT recommended medication {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])} at visit {visit_id} by analysing the scenario with your medical knowledge and to assess the RELEVANCE and CORRECTNESS of the medication hypothesis. \n"""
-
+                    prompt_internist_doctor += f"""Analyse the medical scenario of Visit {visit_id}, in which the system NOT recommended: {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}. \n"""
+                    prompt_internist_doctor += f"""Use medical experience to clarify the rationale behind this recommendation and critically evaluate its RELEVANCE and CORRECTNESS. \n"""
+                    prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the recommended medication, emphasising key factors. \n"""
+                    prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis."""
+                    
             elif self.label_key == "diagnosis":
                 # Prescription decision
                 if self.explanation['prediction'].numpy() > 0.5:
@@ -784,10 +790,13 @@ class HeteroGraphExplainer():
 
             elif doctor_type == "Internist_Doctor":
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_internist_doctor += f"""Provide a summary of MAX 75 words explaining why the drug is JUSTIFIABLE by highlighting the positive and negative aspects of the conditions supporting this recommendation. Please note, if in the medical scenario there is no correlation between the condition and the drug to be recommended, explain why the recommendation is UNJUSTIFIABLE."""
-
+                    prompt_internist_doctor += f"""Compose a short 75-word summary justifying the medication recommendation. Highlight the positive and negative aspects of the patient's condition that form the basis of the recommendation. \n"""
+                    prompt_internist_doctor += f"""Clearly articulate the rationale for administering the prescribed medication. \n"""
+                    prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the recommended medication, explain why the recommendation is not justified."""
                 else:
-                    prompt_internist_doctor += f"""Provide a summary of MAX 75 words explaining why the drug is UNJUSTIFIABLE by highlighting the positive and negative aspects of the conditions supporting this recommendation. Please note, if in the medical scenario there is correlation between the condition and the drug to be recommended, explain why the recommendation is JUSTIFIABLE."""
+                    prompt_internist_doctor += f"""Compose a short 75-word summary justifying the NOT recommendation of medication. Highlight the positive and negative aspects of the patient's condition that underlie the recommendation. \n"""
+                    prompt_internist_doctor += f"""Clearly articulate the rationale for administering the prescribed medication. \n"""
+                    prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the recommended medication, explain why the recommendation is justified."""
 
                 print(prompt_internist_doctor)
                 with open(f'{self.root}prompt_internist_doctor.txt', 'w') as file:
@@ -810,18 +819,13 @@ class HeteroGraphExplainer():
 
             elif doctor_type == "Internist_Doctor":
                 if self.explanation['prediction'].numpy() > 0.5:
-                    prompt_internist_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. The diagnosis prediction system recommended the diagnosis: \n"""
-                    prompt_internist_doctor += f"""{icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])} at visit {visit_id} of the scenario. \n"""
-                    prompt_internist_doctor += f"""Provide a 75-word summary of whether the medication is JUSTIFIABLE or UNJUSTIFIABLE taking into account the levels of importance and the correlations between the conditions and the diagnosis predicted."""
-                    prompt_internist_doctor += f""" If UNJUSTIFIABLE, highlight the negative aspects; if JUSTIFIABLE, emphasise the positive aspects. \n"""
-                    prompt_internist_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the medication but with further analysis may reveal connections with other conditions that justify the recommendation."""
-
+                    prompt_internist_doctor += f"""Compose a short 75-word summary justifying the diagnosis prediction. Highlight the positive and negative aspects of the patient's condition that form the basis of the prediction. \n"""
+                    prompt_internist_doctor += f"""Clearly articulate the rationale for predicting the prescribed diagnosis. \n"""
+                    prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the prediction diagnosis, explain why the prediction is not justified."""
                 else:
-                    prompt_internist_doctor += f"""\nFrom the perspective of your domain, try to understand the connection between the conditions described in the scenario. The diagnosis prediction system recommended the diagnosis: \n"""
-                    prompt_internist_doctor += f"""{icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])} at visit {visit_id} of the scenario. \n"""
-                    prompt_internist_doctor += f"""Provide a 75-word summary of whether the medication is JUSTIFIABLE or UNJUSTIFIABLE taking into account the levels of importance and the correlations between the conditions and the diagnosis NOT predicted."""
-                    prompt_internist_doctor += f""" If UNJUSTIFIABLE, highlight the negative aspects; if JUSTIFIABLE, emphasise the positive aspects. \n"""
-                    prompt_internist_doctor += f"""Pay close attention to the different conditions in the scenario, some may seem irrelevant to the administration of the medication but with further analysis may reveal connections with other conditions that justify the recommendation."""
+                    prompt_internist_doctor += f"""Compose a short 75-word summary justifying the NOT prediction of diagnosis. Highlight the positive and negative aspects of the patient's condition that underlie the prediction. \n"""
+                    prompt_internist_doctor += f"""Clearly articulate the rationale for predicting the prescribed diagnosis. \n"""
+                    prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the prediction diagnosis, explain why the prediction is justified."""
 
                 print(prompt_internist_doctor)
                 with open(f'{self.root}prompt_internist_doctor.txt', 'w') as file:
