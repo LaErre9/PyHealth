@@ -310,6 +310,7 @@ class HeteroGraphExplainer():
         self,
         k: int = 0,
         human_readable: bool = False,
+        dashboard: bool = False,
     ):
 
         # Creazione del grafo NetworkX
@@ -515,7 +516,7 @@ class HeteroGraphExplainer():
         self.G.add_nodes_from(legend_nodes)
 
         # Converti il grafo NetworkX in un grafo Pyvis
-        net = Network(notebook=True, height="750px", width="100%", filter_menu=True, 
+        net = Network(notebook=True, height="750px", width="100%", filter_menu=False, 
                       cdn_resources="remote")
         net.from_nx(self.G)
 
@@ -534,9 +535,13 @@ class HeteroGraphExplainer():
             edge['color'] = edge_colors[edge['type']]
 
         # Visualizza il grafo in un file HTML
-        filepath = f'{self.root}explain_graph{current_datetime}.html'
-        net.show(filepath)
-        webbrowser.open(f'{os.getcwd()}/{filepath}')
+        if dashboard:
+            filepath = f'{self.root}explain_graph.html'
+            net.show(filepath)
+        else:
+            filepath = f'{self.root}explain_graph{current_datetime}.html'
+            net.show(filepath)
+            webbrowser.open(f'{os.getcwd()}/{filepath}')
 
         return
 
