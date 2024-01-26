@@ -624,6 +624,12 @@ class HeteroGraphExplainer():
 
             prompt_recruiter_doctors = """"""
             prompt_internist_doctor = """"""
+            medical_scenario = """"""
+
+            atc_list = sorted(self.atc_pre_dict.keys(), key=lambda x: self.atc_pre_dict[x])
+            icd9_diag_list = sorted(self.icd9_diag_dict.keys(), key=lambda x: self.icd9_diag_dict[x])
+            icd9_proc_list = sorted(self.icd9_proc_dict.keys(), key=lambda x: self.icd9_proc_dict[x])
+            icd9_symp_list = sorted(self.icd9_symp_dict.keys(), key=lambda x: self.icd9_symp_dict[x])
 
             if doctor_type == "Doctor_Recruiter":
                 # Create dynamic text
@@ -632,37 +638,37 @@ class HeteroGraphExplainer():
                     if self.explanation['prediction'].numpy() > 0.5:
                         prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the administration of the medication:"""
-                        prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
+                        prompt_recruiter_doctors += f"""\n"{atc.lookup(atc_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                     else:
                         prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-administration of the medication:"""
-                        prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
+                        prompt_recruiter_doctors += f"""\n"{atc.lookup(atc_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                 elif self.label_key == "diagnosis":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
                         prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the prediction of the diagnosis:"""
-                        prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
+                        prompt_recruiter_doctors += f"""\n"{atc.lookup(icd9_diag_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                     else:
                         prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-prediction of the diagnosis:"""
-                        prompt_recruiter_doctors += f"""\n"{atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
+                        prompt_recruiter_doctors += f"""\n"{atc.lookup(icd9_diag_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
             elif doctor_type == "Internist_Doctor":
 
                 if self.label_key == "medications":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the medication recommendation system recommended: {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the medication recommendation system recommended: {atc.lookup(atc_list[int(medication_id)])}.\n"""
                         prompt_internist_doctor += f"""Use medical expertise to clarify the recommendation and evaluate its CORRECTNESS. \n"""
                         prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the recommended medication, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
                         
                     else:
-                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the medication recommendation system did NOT recommend: {atc.lookup(list(self.atc_pre_dict.keys())[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the medication recommendation system did NOT recommend: {atc.lookup(atc_list[int(medication_id)])}.\n"""
                         prompt_internist_doctor += f"""Use medical expertise to clarify the NO-recommendation and evaluate its CORRECTNESS. \n"""
                         prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the NON-recommended medication, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
@@ -729,59 +735,51 @@ class HeteroGraphExplainer():
             prompt_internist_doctor += f"\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
 
             # List of symptoms presented by the patient
-            prompt_recruiter_doctors += f"Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n"
-            prompt_internist_doctor += f"Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n"
+
 
             for symptom in symptoms:
                 node_type, id = str(symptom).split('_')
                 if node_type == "symptom":
-                    symptom_icd = icd.lookup(list(self.icd9_symp_dict.keys())[int(id)])
-                    if doctor_type == "Doctor_Recruiter":
-                        prompt_recruiter_doctors += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
-                    elif doctor_type == "Internist_Doctor":
-                        prompt_internist_doctor += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
+                    symptom_icd = icd.lookup(icd9_symp_list[int(id)])
+                    medical_scenario += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
 
 
             # List of procedures performed on the patient
-            prompt_recruiter_doctors += f"\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n"
-            prompt_internist_doctor += f"\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n"
 
             for procedure in procedures:
                 node_type, id = str(procedure).split('_')
                 if node_type == "procedure":
-                    procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id)])
-                    if doctor_type == "Doctor_Recruiter":
-                        prompt_recruiter_doctors += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
-                    elif doctor_type == "Internist_Doctor":
-                        prompt_internist_doctor += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
+                    procedure_icd = icdpr.lookup(icd9_proc_list[int(id)])
+                    medical_scenario += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
 
 
             # List of patient's diagnoses
-            prompt_recruiter_doctors += f"\nPatient diagnoses important from the system (ordered by level of importance):\n\n"
-            prompt_internist_doctor += f"\nPatient diagnoses important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"\nPatient diagnoses important from the system (ordered by level of importance):\n\n"
 
             for diagnosis in diagnosis:
                 node_type, id = str(diagnosis).split('_')
                 if node_type == "diagnosis":
-                    diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
-                    if doctor_type == "Doctor_Recruiter":
-                        prompt_recruiter_doctors += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
-                    elif doctor_type == "Internist_Doctor":
-                        prompt_internist_doctor += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
+                    diagnosis_icd = icd.lookup(icd9_diag_list[int(id)])
+                    medical_scenario += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
 
 
             # List of medications administered to the patient
-            prompt_recruiter_doctors += f"\nMedications already administered to the patient found important from the system (ordered by level of importance):\n\n"
-            prompt_internist_doctor += f"\nMedications already administered to the patient found important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"\nMedications already administered to the patient found important from the system (ordered by level of importance):\n\n"
+
 
             for medication in medications:
                 node_type, id = str(medication).split('_')
                 if node_type == "medication":
-                    medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
-                    if doctor_type == "Doctor_Recruiter":
-                        prompt_recruiter_doctors += "- " + medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
-                    elif doctor_type == "Internist_Doctor":
-                        prompt_internist_doctor += "- " +medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
+                    medication_atc = atc.lookup(atc_list[int(id)])
+                    medical_scenario += "- " + medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
+
+            with open(f'{self.root}medical_scenario.txt', 'w') as file:
+                file.write(medical_scenario)
+
+            prompt_recruiter_doctors += medical_scenario
+            prompt_internist_doctor += medical_scenario
 
             if self.label_key == "medications":
                 if doctor_type == "Doctor_Recruiter":
