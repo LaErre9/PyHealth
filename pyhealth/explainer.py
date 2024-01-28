@@ -352,6 +352,11 @@ class HeteroGraphExplainer():
             edge_colors[('anatomy', 'visit')] = '#bc8f8f'
             edge_colors[('pharmaclass', 'visit')] = '#483d8b'
 
+        atc_list = sorted(self.atc_pre_dict.keys(), key=lambda x: self.atc_pre_dict[x])
+        icd9_diag_list = sorted(self.icd9_diag_dict.keys(), key=lambda x: self.icd9_diag_dict[x])
+        icd9_proc_list = sorted(self.icd9_proc_dict.keys(), key=lambda x: self.icd9_proc_dict[x])
+        icd9_symp_list = sorted(self.icd9_symp_dict.keys(), key=lambda x: self.icd9_symp_dict[x])
+
         # MI PRENDO I NODI PIU' IMPORTANTI
         nodess = {}
         for node_type, node_data in self.explanation.node_items():
@@ -366,28 +371,28 @@ class HeteroGraphExplainer():
                         if human_readable:
                             node_type_d, id = str(node_id).split('_')
                             if node_type_d == "symptom":
-                                symptom_icd = icd.lookup(list(self.icd9_symp_dict.keys())[int(id)])
+                                symptom_icd = icd.lookup(icd9_symp_list[int(id)])
                                 print(f"{node_type} {id} {symptom_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
                                 self.G.add_node(symptom_icd, type=node_type, size=node_size)
                             
                             elif node_type_d == "procedure":
-                                procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id)])
+                                procedure_icd = icdpr.lookup(icd9_proc_list[int(id)])
                                 print(f"{node_type} {id} {procedure_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
                                 self.G.add_node(procedure_icd, type=node_type, size=node_size)
 
                             elif node_type_d == "diagnosis":
-                                diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id)])
+                                diagnosis_icd = icd.lookup(icd9_diag_list[int(id)])
                                 print(f"{node_type} {id} {diagnosis_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
                                 self.G.add_node(diagnosis_icd, type=node_type, size=node_size)
 
                             elif node_type_d == "medication":
-                                medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id)])
+                                medication_atc = atc.lookup(atc_list[int(id)])
                                 print(f"{node_type} {id} {medication_atc} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
@@ -439,19 +444,19 @@ class HeteroGraphExplainer():
 
                         ############ SOURCE ID ###########
                         if source_id_d == "symptom":
-                            symptom_icd = icd.lookup(list(self.icd9_symp_dict.keys())[int(id_s)])
+                            symptom_icd = icd.lookup(icd9_symp_list[int(id_s)])
                             source_id = symptom_icd
 
                         elif source_id_d == "procedure":
-                            procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id_s)])
+                            procedure_icd = icdpr.lookup(icd9_proc_list[int(id_s)])
                             source_id = procedure_icd
 
                         elif source_id_d == "diagnosis":
-                            diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id_s)])
+                            diagnosis_icd = icd.lookup(icd9_diag_list[int(id_s)])
                             source_id = diagnosis_icd
 
                         elif source_id_d == "medication":
-                            medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id_s)])
+                            medication_atc = atc.lookup(atc_list[int(id_s)])
                             source_id = medication_atc
 
                         elif source_id_d == "patient":
@@ -462,19 +467,19 @@ class HeteroGraphExplainer():
 
                         ############ TARGET ID ############
                         if target_id_d == "symptom":
-                            symptom_icd = icd.lookup(list(self.icd9_symp_dict.keys())[int(id_t)])
+                            symptom_icd = icd.lookup(icd9_symp_list[int(id_t)])
                             target_id = symptom_icd
 
                         elif target_id_d == "procedure":
-                            procedure_icd = icdpr.lookup(list(self.icd9_proc_dict.keys())[int(id_t)])
+                            procedure_icd = icdpr.lookup(icd9_proc_list[int(id_t)])
                             target_id = procedure_icd
 
                         elif target_id_d == "diagnosis":
-                            diagnosis_icd = icd.lookup(list(self.icd9_diag_dict.keys())[int(id_t)])
+                            diagnosis_icd = icd.lookup(icd9_diag_list[int(id_t)])
                             target_id = diagnosis_icd
 
                         elif target_id_d == "medication":
-                            medication_atc = atc.lookup(list(self.atc_pre_dict.keys())[int(id_t)])
+                            medication_atc = atc.lookup(atc_list[int(id_t)])
                             target_id = medication_atc
 
                         elif target_id_d == "patient":
@@ -489,36 +494,37 @@ class HeteroGraphExplainer():
                     if source_id in self.nodess.keys() and target_id in self.nodess.keys():
                         self.G.add_edge(source_id, target_id, type=(edge_type[0], edge_type[2]))
 
-        # Add Legend Nodes
-        step = 120
-        x = 550
-        y = -350
+        # # Add Legend Nodes
+        # step = 120
+        # x = 550
+        # y = -350
 
-        legend_nodes = [
-            (
-                len(self.nodess) + i, 
-                {
-                    'group': i, 
-                    'label': legend_type,
-                    'type': legend_type,
-                    'size': 90, 
-                    'fixed': True, 
-                    'physics': False, 
-                    'x': f'{x + i*step}px', 
-                    'y': y, 
-                    'shape': 'box', 
-                    'widthConstraint': 90, 
-                    'font': {'size': 15}
-                }
-            )
-            for i, legend_type in enumerate(node_colors.keys())
-        ]
-        self.G.add_nodes_from(legend_nodes)
+        # legend_nodes = [
+        #     (
+        #         len(self.nodess) + i, 
+        #         {
+        #             'group': i, 
+        #             'label': legend_type,
+        #             'type': legend_type,
+        #             'size': 90, 
+        #             'fixed': True, 
+        #             'physics': False, 
+        #             'x': f'{x + i*step}px', 
+        #             'y': y, 
+        #             'shape': 'box', 
+        #             'widthConstraint': 90, 
+        #             'font': {'size': 15}
+        #         }
+        #     )
+        #     for i, legend_type in enumerate(node_colors.keys())
+        # ]
+        # self.G.add_nodes_from(legend_nodes)
 
         # Converti il grafo NetworkX in un grafo Pyvis
-        net = Network(notebook=True, height="750px", width="100%", filter_menu=False, 
+        net = Network(notebook=True, height="650px", width="100%", filter_menu=False, 
                       cdn_resources="remote")
         net.from_nx(self.G)
+        
 
         # Assegna i colori, le dimensioni e l'opacità ai nodi in Pyvis
         for i, node in enumerate(net.nodes):
@@ -603,13 +609,14 @@ class HeteroGraphExplainer():
                                             self.label_key)
                 print("Instability Score: " + str(stability_score))
 
+        
         return
 
     def explain_results(
-            self,
-            n: int,
-            doctor_type: str = "Doctor_Recruiter"
-        ):
+                self,
+                n: int,
+                doctor_type: str = "Doctor_Recruiter"
+    ):
 
             icd = InnerMap.load("ICD9CM")
             icdpr = InnerMap.load("ICD9PROC")
@@ -636,24 +643,24 @@ class HeteroGraphExplainer():
                 if self.label_key == "medications":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
+                        prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the administration of the medication:"""
                         prompt_recruiter_doctors += f"""\n"{atc.lookup(atc_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                     else:
-                        prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
+                        prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-administration of the medication:"""
                         prompt_recruiter_doctors += f"""\n"{atc.lookup(atc_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                 elif self.label_key == "diagnosis":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
+                        prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the prediction of the diagnosis:"""
                         prompt_recruiter_doctors += f"""\n"{atc.lookup(icd9_diag_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                     else:
-                        prompt_recruiter_doctors += f"""You are a medical expert specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
+                        prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-prediction of the diagnosis:"""
                         prompt_recruiter_doctors += f"""\n"{atc.lookup(icd9_diag_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
@@ -662,28 +669,28 @@ class HeteroGraphExplainer():
                 if self.label_key == "medications":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the medication recommendation system recommended: {atc.lookup(atc_list[int(medication_id)])}.\n"""
-                        prompt_internist_doctor += f"""Use medical expertise to clarify the recommendation and evaluate its CORRECTNESS. \n"""
-                        prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the recommended medication, emphasizing key factors. \n"""
+                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the MEDICATION RECOMMENDATION system recommended: "{atc.lookup(atc_list[int(medication_id)])}".\n"""
+                        prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the recommendation and evaluate its CORRECTNESS. \n"""
+                        prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the recommended medication, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
                         
                     else:
-                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the medication recommendation system did NOT recommend: {atc.lookup(atc_list[int(medication_id)])}.\n"""
-                        prompt_internist_doctor += f"""Use medical expertise to clarify the NO-recommendation and evaluate its CORRECTNESS. \n"""
-                        prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the NON-recommended medication, emphasizing key factors. \n"""
+                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the medication recommendation system did NOT recommend: {atc.lookup(atc_list[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the NO-recommendation and evaluate its CORRECTNESS. \n"""
+                        prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the NON-recommended medication, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
                         
-                elif self.label_key == "conditions":
+                elif self.label_key == "diagnosis":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system recommended: {icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])}.\n"""
-                        prompt_internist_doctor += f"""Use medical expertise to clarify the recommendation and evaluate its CORRECTNESS. \n"""
-                        prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the recommended diagnosis, emphasizing key factors. \n"""
+                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system recommended: {icd.lookup(icd9_diag_list[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the recommendation and evaluate its CORRECTNESS. \n"""
+                        prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the recommended diagnosis, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
                     else:
-                        prompt_internist_doctor += f"""Analyze the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system did NOT recommend: {icd.lookup(list(self.icd9_diag_dict.keys())[int(diagnosis_id)])}.\n"""
-                        prompt_internist_doctor += f"""Use medical expertise to clarify the NO-recommendation and evaluate its CORRECTNESS. \n"""
-                        prompt_internist_doctor += f"""Provide guidance on the alignment between the patient's condition and the NON-recommended diagnosis, emphasizing key factors. \n"""
+                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system did NOT recommend: {icd.lookup(icd9_diag_list[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the NO-recommendation and evaluate its CORRECTNESS. \n"""
+                        prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the NON-recommended diagnosis, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
 
             symptoms = []
@@ -731,12 +738,15 @@ class HeteroGraphExplainer():
             diagnosis = sorted(set(diagnosis), key=lambda x: self.nodess[x], reverse=True)
             medications = sorted(set(medications), key=lambda x: self.nodess[x], reverse=True)
 
-            prompt_recruiter_doctors += f"\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
-            prompt_internist_doctor += f"\nThe patient's medical scenario, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
+            prompt_recruiter_doctors += f"\nTHE FOLLOWING MEDICAL SCENARIO of the patient in the visit {visit_id}, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
+            prompt_internist_doctor += f"\n\nTHE FOLLOWING MEDICAL SCENARIO of the patient in the visit {visit_id}, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
 
             # List of symptoms presented by the patient
-            medical_scenario += f"Symptoms presented by the patient found to be important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"**Symptoms** presented by the patient found to be important from the system (ordered by level of importance):\n\n"
 
+
+            if symptoms == []:
+                medical_scenario += "- No symptoms found\n"
 
             for symptom in symptoms:
                 node_type, id = str(symptom).split('_')
@@ -746,7 +756,10 @@ class HeteroGraphExplainer():
 
 
             # List of procedures performed on the patient
-            medical_scenario += f"\nProcedures performed on the patient results important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"\n**Procedures** performed on the patient results important from the system (ordered by level of importance):\n\n"
+
+            if procedures == []:
+                medical_scenario += "- No procedures found\n"
 
             for procedure in procedures:
                 node_type, id = str(procedure).split('_')
@@ -756,7 +769,10 @@ class HeteroGraphExplainer():
 
 
             # List of patient's diagnoses
-            medical_scenario += f"\nPatient diagnoses important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"\nPatient **diagnosis** important from the system (ordered by level of importance):\n\n"
+
+            if diagnosis == []:
+                medical_scenario += "- No diagnosis found\n"
 
             for diagnosis in diagnosis:
                 node_type, id = str(diagnosis).split('_')
@@ -764,10 +780,11 @@ class HeteroGraphExplainer():
                     diagnosis_icd = icd.lookup(icd9_diag_list[int(id)])
                     medical_scenario += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
 
-
             # List of medications administered to the patient
-            medical_scenario += f"\nMedications already administered to the patient found important from the system (ordered by level of importance):\n\n"
+            medical_scenario += f"\n**Medications** already administered to the patient found important from the system (ordered by level of importance):\n\n"
 
+            if medications == []:
+                medical_scenario += "- No medications found\n"
 
             for medication in medications:
                 node_type, id = str(medication).split('_')
@@ -796,12 +813,12 @@ class HeteroGraphExplainer():
 
                 elif doctor_type == "Internist_Doctor":
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_internist_doctor += f"""\nCompose a short 75-word summary justifying the medication recommendation. Highlight the positive and negative aspects of the patient's condition that form the basis of the recommendation. \n"""
+                        prompt_internist_doctor += f"""\nCOMPOSE a summary JUSTIFYING the recommendation of the medication. HIGHLIGHT the positive and negative aspects of administering the medication to the patient taking into account the medical scenario. \n"""
                         prompt_internist_doctor += f"""Clearly articulate the rationale for administering the prescribed medication. \n"""
                         prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the recommended medication, explain why the recommendation is not justified. \n"""
                     else:
-                        prompt_internist_doctor += f"""\nCompose a short 75-word summary justifying the NOT recommendation of medication. Highlight the positive and negative aspects of the patient's condition that underlie the recommendation. \n"""
-                        prompt_internist_doctor += f"""Clearly articulate the rationale for administering the prescribed medication. \n"""
+                        prompt_internist_doctor += f"""\nCompose a summary JUSTIFYING the NOT recommendation of the medication. HIGHLIGHT the positive and negative aspects of administering the medication to the patient taking into account the medical scenario. \n"""
+                        prompt_internist_doctor += f"""Clearly articulate the rationale for NOT administering the prescribed medication. \n"""
                         prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the recommended medication, explain why the recommendation is justified."""
 
                     print(prompt_internist_doctor)
@@ -825,16 +842,16 @@ class HeteroGraphExplainer():
 
                 elif doctor_type == "Internist_Doctor":
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_internist_doctor += f"""\nCompose a short 75-word summary justifying the diagnosis prediction. Highlight the positive and negative aspects of the patient's condition that form the basis of the prediction. \n"""
+                        prompt_internist_doctor += f"""\nCOMPOSE a summary JUSTIFYING the recommendation of the diagnosis. HIGHLIGHT the positive and negative aspects of prediction the diagnosis to the patient taking into account the medical scenario. \n"""
                         prompt_internist_doctor += f"""Clearly articulate the rationale for predicting the prescribed diagnosis. \n"""
                         prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the prediction diagnosis, explain why the prediction is not justified."""
                     else:
-                        prompt_internist_doctor += f"""\nCompose a short 75-word summary justifying the NOT prediction of diagnosis. Highlight the positive and negative aspects of the patient's condition that underlie the prediction. \n"""
-                        prompt_internist_doctor += f"""Clearly articulate the rationale for predicting the prescribed diagnosis. \n"""
+                        prompt_internist_doctor += f"""\nCOMPOSE a summary JUSTIFYING the NOT recommendation of diagnosis. HIGHLIGHT the positive and negative aspects of prediction the diagnosis to the patient taking into account the medical scenario. \n"""
+                        prompt_internist_doctor += f"""Clearly articulate the rationale for NOT predicting the prescribed diagnosis. \n"""
                         prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the prediction diagnosis, explain why the prediction is justified."""
 
                     print(prompt_internist_doctor)
                     with open(f'{self.root}prompt_internist_doctor.txt', 'w') as file:
                         file.write(prompt_internist_doctor)
 
-                    return prompt_internist_doctor
+            return prompt_internist_doctor
