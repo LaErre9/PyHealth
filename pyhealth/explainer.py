@@ -436,7 +436,7 @@ class HeteroGraphExplainer():
                 # edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
                 # if edge_mask > 0:
-                    #     print(source_id + " -> " + target_id + " Importance: " + str(edge_mask))
+                    # print(source_id + " -> " + target_id + " Importance: " + str(edge_mask))
                 if human_readable:
                     if source_id in self.nodess.keys() and target_id in self.nodess.keys():
                         source_id_d, id_s = str(source_id).split('_')
@@ -521,8 +521,9 @@ class HeteroGraphExplainer():
         # self.G.add_nodes_from(legend_nodes)
 
         # Converti il grafo NetworkX in un grafo Pyvis
-        net = Network(notebook=True, height="650px", width="100%", filter_menu=False, 
+        net = Network(notebook=True, height="500px", filter_menu=False, 
                       cdn_resources="remote")
+        net.set_options('{"layout": {"randomSeed":5}}')
         net.from_nx(self.G)
         
 
@@ -532,7 +533,7 @@ class HeteroGraphExplainer():
             if 'size' in self.G.nodes[node['id']] and node['id'] in self.nodess.keys():
                 node['size'] = self.G.nodes[node['id']]['size']
                 if self.algorithm == "GNNExplainer":
-                    node['opacity'] = self.nodess[node['id']]
+                    node['opacity'] = self.nodess[node['id']] * 20
                 else:
                     node['opacity'] = self.nodess[node['id']] * 20
 
@@ -625,7 +626,7 @@ class HeteroGraphExplainer():
             if self.label_key == "medications":
                 visit_id = self.subgraph['visit', 'has_received', 'medication'].edge_label_index[:, n][0].item()
                 medication_id = self.subgraph['visit', 'has_received', 'medication'].edge_label_index[:, n][1].item()
-            elif self.label_key == "diagnoses":
+            elif self.label_key == "diagnosis":
                 visit_id = self.subgraph['visit', 'has', 'diagnosis'].edge_label_index[:, n][0].item()
                 diagnosis_id = self.subgraph['visit', 'has', 'diagnosis'].edge_label_index[:, n][1].item()
 
@@ -657,12 +658,12 @@ class HeteroGraphExplainer():
                     if self.explanation['prediction'].numpy() > 0.5:
                         prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the prediction of the diagnosis:"""
-                        prompt_recruiter_doctors += f"""\n"{atc.lookup(icd9_diag_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
+                        prompt_recruiter_doctors += f"""\n"{icd.lookup(icd9_diag_list[int(diagnosis_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
                     else:
                         prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the NON-prediction of the diagnosis:"""
-                        prompt_recruiter_doctors += f"""\n"{atc.lookup(icd9_diag_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
+                        prompt_recruiter_doctors += f"""\n"{icd.lookup(icd9_diag_list[int(diagnosis_id)])}" at visit {visit_id} and on the patient's condition. \n"""
 
             elif doctor_type == "Internist_Doctor":
 
@@ -683,12 +684,12 @@ class HeteroGraphExplainer():
                 elif self.label_key == "diagnosis":
                     # Prescription decision
                     if self.explanation['prediction'].numpy() > 0.5:
-                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system recommended: {icd.lookup(icd9_diag_list[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system recommended: {icd.lookup(icd9_diag_list[int(diagnosis_id)])}.\n"""
                         prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the recommendation and evaluate its CORRECTNESS. \n"""
                         prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the recommended diagnosis, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
                     else:
-                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system did NOT recommend: {icd.lookup(icd9_diag_list[int(medication_id)])}.\n"""
+                        prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system did NOT recommend: {icd.lookup(icd9_diag_list[int(diagnosis_id)])}.\n"""
                         prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the NO-recommendation and evaluate its CORRECTNESS. \n"""
                         prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the NON-recommended diagnosis, emphasizing key factors. \n"""
                         prompt_internist_doctor += f"""Ensure clarity and conciseness in the analysis in 100 words."""
@@ -716,9 +717,16 @@ class HeteroGraphExplainer():
                                 elif target == "procedure":
                                     procedures.append(target_id)
                                 elif target == "diagnosis":
-                                    diagnosis.append(target_id)
+                                    if self.label_key == "medications":
+                                        diagnosis.append(target_id)
+                                    elif self.label_key == "diagnosis":
+                                        if tgt_id != str(diagnosis_id):
+                                            diagnosis.append(target_id)
                                 elif target == "medication":
-                                    if tgt_id != str(medication_id):
+                                    if self.label_key == "medications":
+                                        if tgt_id != str(medication_id):
+                                            medications.append(target_id)
+                                    elif self.label_key == "diagnosis":
                                         medications.append(target_id)
 
                             elif target == "visit" and tgt_id == str(visit_id):
@@ -727,11 +735,18 @@ class HeteroGraphExplainer():
                                 elif source == "procedure":
                                     procedures.append(source_id)
                                 elif source == "diagnosis":
-                                    diagnosis.append(source_id)
+                                    if self.label_key == "medications":
+                                        diagnosis.append(source_id)
+                                    elif self.label_key == "diagnosis":
+                                        if src_id != str(diagnosis_id):
+                                            diagnosis.append(source_id)
                                 elif source == "medication":
-                                    if src_id != str(medication_id):
+                                    if self.label_key == "medications":
+                                        if src_id != str(medication_id):
+                                            medications.append(source_id)
+                                    elif self.label_key == "diagnosis":
                                         medications.append(source_id)
-                                    
+
 
             symptoms = sorted(set(symptoms), key=lambda x: self.nodess[x], reverse=True)
             procedures = sorted(set(procedures), key=lambda x: self.nodess[x], reverse=True)
@@ -827,7 +842,7 @@ class HeteroGraphExplainer():
 
                     return prompt_internist_doctor
 
-            elif self.label_key == "conditions":
+            elif self.label_key == "diagnosis":
                 if doctor_type == "Doctor_Recruiter":
                     prompt_recruiter_doctors += f"""For each doctor in the JSON file, include: """
                     prompt_recruiter_doctors += f"""\n- 'role': 'Specify medical speciality'"""
