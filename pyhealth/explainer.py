@@ -525,6 +525,14 @@ class HeteroGraphExplainer():
                       cdn_resources="remote")
         net.set_options('{"layout": {"randomSeed":5}}')
         net.from_nx(self.G)
+        net.set_options("""
+        const options = {
+            "interaction": {
+                "hover": true,
+                "navigationButtons": true
+            }
+        }
+        """)
         
 
         # Assegna i colori, le dimensioni e l'opacità ai nodi in Pyvis
