@@ -523,10 +523,13 @@ class HeteroGraphExplainer():
         # Converti il grafo NetworkX in un grafo Pyvis
         net = Network(notebook=True, height="500px", filter_menu=False, 
                       cdn_resources="remote")
-        net.set_options('{"layout": {"randomSeed":5}}')
+        #net.set_options('{"layout": {"randomSeed":5}}')
         net.from_nx(self.G)
         net.set_options("""
         const options = {
+            "layout": {
+                "randomSeed":5
+            },
             "interaction": {
                 "hover": true,
                 "navigationButtons": true
