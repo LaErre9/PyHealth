@@ -537,7 +537,6 @@ class HeteroGraphExplainer():
         }
         """)
         
-
         # Assegna i colori, le dimensioni e l'opacità ai nodi in Pyvis
         for i, node in enumerate(net.nodes):
             node['color'] = node_colors[node['type']]
@@ -855,7 +854,7 @@ class HeteroGraphExplainer():
 
             elif self.label_key == "diagnosis":
                 if doctor_type == "Doctor_Recruiter":
-                    prompt_recruiter_doctors += f"""For each doctor in the JSON file, include: """
+                    prompt_recruiter_doctors += f"""\nFor each doctor in the JSON file, include: """
                     prompt_recruiter_doctors += f"""\n- 'role': 'Specify medical speciality'"""
                     prompt_recruiter_doctors += f"""\n- 'description': 'You are a [role identified] with expertise in [describe skills]'"""
                     prompt_recruiter_doctors += f"""\n\nThe structure of the JSON:\n'doctors': [\n\t'role': \n\t'description': \n]"""
