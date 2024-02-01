@@ -565,11 +565,11 @@ class HeteroGraphExplainer():
     def explain_metrics(
         self,
         metrics: List[str] = 'Fidelity',
-    ):
+    ) -> Dict[str, float]:
 
         explainer = self.explainer
         explanation = self.explanation
-
+        results = {}
         for metric in metrics:
             if metric == "Fidelity":
                 if self.label_key == "medications":
@@ -581,6 +581,8 @@ class HeteroGraphExplainer():
                     pos_fidelity, neg_fidelity = fidelity(explainer, explanation, self.subgraph, self.node_features, 
                                                         self.subgraph['visit', 'diagnosis'].edge_label_index, 
                                                         self.subgraph['visit', 'diagnosis'].edge_label)
+                results.update({"Fidelity Positive": float(round(pos_fidelity,4))})
+                results.update({"Fidelity Negative": float(round(neg_fidelity,4))})
                 print("Fidelity Positive: " + str(float(pos_fidelity)))
                 print("Fidelity Negative: " + str(float(neg_fidelity)))
 
@@ -595,6 +597,7 @@ class HeteroGraphExplainer():
                                                         self.subgraph['visit', 'diagnosis'].edge_label_index, 
                                                         self.subgraph['visit', 'diagnosis'].edge_label)
                 score = (2 * pos_fidelity * (1-neg_fidelity)) / (pos_fidelity + (1-neg_fidelity))
+                results.update({"Fidelity F1": float(round(score,4))})
                 print("Fidelity (weighted): " + str(score))
 
             elif metric == "Unfaithfulness":
@@ -609,19 +612,21 @@ class HeteroGraphExplainer():
                                                         self.subgraph['visit', 'diagnosis'].edge_label_index, 
                                                         self.subgraph['visit', 'diagnosis'].edge_label,
                                                         top_k=self.feat_size)
+                results.update({"Unfaithfulness": float(round(unfaithfulness_score,4))})
                 print("Unfaithfulness Score: " + str(unfaithfulness_score))
 
             elif metric == "Sparsity":
                 sparsity_score = sparsity(explainer, explanation)
+                results.update({"Sparsity": float(round(sparsity_score,4))})
                 print("Sparsity Score: " + str(sparsity_score))
 
             elif metric == "Instability":
                 stability_score = stability(explainer, explanation, self.subgraph, self.n, self.node_features, 
                                             self.label_key)
+                results.update({"Instability": float(round(stability_score,4))})
                 print("Instability Score: " + str(stability_score))
 
-        
-        return
+        return results
 
     def explain_results(
                 self,
