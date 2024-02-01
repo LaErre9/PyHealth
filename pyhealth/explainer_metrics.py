@@ -24,6 +24,7 @@ def stability(
 
     GES = []
     num_run = 3
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     for run in range(num_run):
 
@@ -31,15 +32,15 @@ def stability(
             # Clona i tensori e applica il rumore
             node_features_pert = {k: v.clone().detach() for k, v in node_features.items()}
             if label_key == "medications":
-                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'medication'].edge_label_index[:, n][0]].shape)
-                noise_drug = torch.normal(0, 0.01, node_features_pert['medication'][subgraph['visit', 'medication'].edge_label_index[:, n][1]].shape)
+                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'medication'].edge_label_index[:, n][0]].shape).to(device)
+                noise_drug = torch.normal(0, 0.01, node_features_pert['medication'][subgraph['visit', 'medication'].edge_label_index[:, n][1]].shape).to(device)
 
                 node_features_pert['visit'][subgraph['visit', 'medication'].edge_label_index[:, n][0]] += noise_visit
                 node_features_pert['medication'][subgraph['visit', 'medication'].edge_label_index[:, n][1]] += noise_drug
 
             elif label_key == "diagnosis":
-                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][0]].shape)
-                noise_disease = torch.normal(0, 0.01, node_features_pert['diagnosis'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][1]].shape)
+                noise_visit = torch.normal(0, 0.01, node_features_pert['visit'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][0]].shape).to(device)
+                noise_disease = torch.normal(0, 0.01, node_features_pert['diagnosis'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][1]].shape).to(device)
 
                 node_features_pert['visit'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][0]] += noise_visit
                 node_features_pert['diagnosis'][subgraph['visit', 'diagnosis'].edge_label_index[:, n][1]] += noise_disease
@@ -71,6 +72,7 @@ def stability(
             existing_edges[index] = new_edges.pop()
 
         perturbed_edge_index = torch.tensor(existing_edges).t()
+        perturbed_edge_index = perturbed_edge_index.to(device)
 
         # Copia il dizionario degli indici degli archi esistente
         perturbed_edge_index_dict = subgraph.edge_index_dict.copy()
