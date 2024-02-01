@@ -977,7 +977,7 @@ class GNN(BaseModel):
         plt.legend(handles=legend_handles, loc="lower right")
         plt.show()
 
-    def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
+    def calculate_loss(self, pred: torch.Tensor, y_true: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """Calculates the loss."""
         # Calculate class weights
         class_weights = compute_class_weights(y_true)
@@ -1034,7 +1034,7 @@ class GNN(BaseModel):
         # Get the subgraph
         self.subgraph = self.get_subgraph()
         self.subgraph = self.generate_neg_samples()
-        # self.mask = self.generate_mask()
+        self.mask = self.generate_mask()
 
         self.subgraph = self.subgraph.to(device=self.device)
 
@@ -1044,11 +1044,11 @@ class GNN(BaseModel):
         if self.label_key == "medications":
             pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
                                 self.subgraph['visit', 'medication'].edge_label_index)
-            loss = self.calculate_loss(pred, self.subgraph['visit', 'medication'].edge_label)
+            loss = self.calculate_loss(pred, self.subgraph['visit', 'medication'].edge_label, self.mask)
         else:
             pred = self.layer(self.node_features, self.subgraph.edge_index_dict, 
                                 self.subgraph['visit', 'diagnosis'].edge_label_index)
-            loss = self.calculate_loss(pred, self.subgraph['visit', 'diagnosis'].edge_label)
+            loss = self.calculate_loss(pred, self.subgraph['visit', 'diagnosis'].edge_label, self.mask)
 
         # Prepare the predicted probabilities applying the sigmoid function
         self.y_prob = self.prepare_y_prob(pred)
