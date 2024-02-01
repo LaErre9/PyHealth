@@ -15,7 +15,7 @@ from torch_geometric.utils import negative_sampling
 from torch_geometric.utils import coalesce
 from torch_geometric.data import HeteroData
 import torch_geometric.transforms as T
-from torch_geometric.nn import GraphConv, to_hetero
+from torch_geometric.nn import GraphConv, SAGEConv, FiLMConv, to_hetero
 
 from pyhealth.models import BaseModel
 from pyhealth.datasets import SampleEHRDataset
@@ -39,15 +39,17 @@ def compute_class_weights(y_true):
 # Since the dataset does not come with rich features, we also learn four
 # embedding matrices for patients, symptoms, procedures and diagnosis:
 class X_Dict(torch.nn.Module):
-  def __init__(self, k: int, static_kg: List[str], data: HeteroData, embedding_dim):
+  def __init__(self, k: int, static_kg: List[str], data_enrich: bool, data: HeteroData, embedding_dim):
     super().__init__()
 
     self.k = k
     self.static_kg = static_kg
+    self.data_enrich = data_enrich
 
     self.pat_emb = torch.nn.Embedding(data["patient"].num_nodes, embedding_dim)
     self.vis_emb = torch.nn.Embedding(data["visit"].num_nodes, embedding_dim)
-    self.symp_emb = torch.nn.Embedding(data["symptom"].num_nodes, embedding_dim)
+    if self.data_enrich:
+        self.symp_emb = torch.nn.Embedding(data["symptom"].num_nodes, embedding_dim)
     self.proc_emb = torch.nn.Embedding(data["procedure"].num_nodes, embedding_dim)
     self.dis_emb = torch.nn.Embedding(data["diagnosis"].num_nodes, embedding_dim)
     self.medication_emb = torch.nn.Embedding(data["medication"].num_nodes, embedding_dim)
@@ -64,11 +66,12 @@ class X_Dict(torch.nn.Module):
     x_dict = {
         'patient': self.pat_emb(batch['patient']['node_id']),
         'visit': self.vis_emb(batch['visit']['node_id']),
-        'symptom': self.symp_emb(batch['symptom']['node_id']),
         'procedure': self.proc_emb(batch['procedure']['node_id']),
         'diagnosis': self.dis_emb(batch['diagnosis']['node_id']),
         'medication': self.medication_emb(batch['medication']['node_id']),
     }
+    if self.data_enrich:
+        x_dict['symptom'] = self.symp_emb(batch['symptom']['node_id'])
 
     if self.k == 2:
         for relation in self.static_kg:
@@ -81,25 +84,63 @@ class X_Dict(torch.nn.Module):
 
 #### Define a simple GNN model:
 class GNN_Conv(torch.nn.Module):
-    def __init__(self, hidden_channels):
+    def __init__(self, hidden_channels, convlayer):
         super().__init__()
+        self.convlayer = convlayer
 
-        self.conv1 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
-        self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
-        self.conv2 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
-        self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
-        self.conv3 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
-        self.dropout = torch.nn.Dropout(p=0.3)
+        if convlayer == "GraphConv":
+            self.conv1 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
+            self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv2 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
+            self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv3 = GraphConv(hidden_channels, hidden_channels, aggr="mean", add_self_loops=False)
+            self.dropout = torch.nn.Dropout(p=0.3)
+        elif convlayer == "SAGEConv":
+            self.conv1 = SAGEConv((-1, -1), hidden_channels, normalize=True)
+            self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv2 = SAGEConv((-1, -1), hidden_channels, normalize=True)
+            self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv3 = SAGEConv((-1, -1), hidden_channels)
+        elif convlayer == "FiLMConv":
+            self.conv1 = FiLMConv(hidden_channels, hidden_channels)
+            self.bn1 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv2 = FiLMConv(hidden_channels, hidden_channels)
+            self.bn2 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv3 = FiLMConv(hidden_channels, hidden_channels)
+            self.bn3 = torch.nn.BatchNorm1d(hidden_channels)
+            self.conv4 = FiLMConv(hidden_channels, hidden_channels)
+            self.dropout = torch.nn.Dropout(p=0.3)
 
     def forward(self, x: torch.Tensor, edge_index: torch.Tensor) -> torch.Tensor:
-        x = self.conv1(x, edge_index)
-        x = self.bn1(x)
-        x = F.relu(x)
-        x = self.conv2(x, edge_index)
-        x = self.bn2(x)
-        x = F.relu(x)
-        x = self.conv3(x, edge_index)
-        x = self.dropout(x)
+        if self.convlayer == "GraphConv":
+            x = self.conv1(x, edge_index)
+            x = self.bn1(x)
+            x = F.relu(x)
+            x = self.conv2(x, edge_index)
+            x = self.bn2(x)
+            x = F.relu(x)
+            x = self.conv3(x, edge_index)
+            x = self.dropout(x)
+        elif self.convlayer == "SAGEConv":
+            x = self.conv1(x, edge_index)
+            x = self.bn1(x)
+            x = F.relu(x)
+            x = self.conv2(x, edge_index)
+            x = self.bn2(x)
+            x = F.relu(x)
+            x = self.conv3(x, edge_index)
+        elif self.convlayer == "FiLMConv":
+            x = self.conv1(x, edge_index)
+            x = self.bn1(x)
+            x = F.relu(x)
+            x = self.conv2(x, edge_index)
+            x = self.bn2(x)
+            x = F.relu(x)
+            x = self.conv3(x, edge_index)
+            x = self.bn3(x)
+            x = F.relu(x)
+            x = self.conv4(x, edge_index)
+            x = self.dropout(x)
 
         return x
 
@@ -135,6 +176,7 @@ class GNNLayer(torch.nn.Module):
     def __init__(
         self,
         data: HeteroData,
+        convlayer: str,
         label_key: str,
         static_kg: List[str],
         k: int,
@@ -143,17 +185,19 @@ class GNNLayer(torch.nn.Module):
     ):
         super(GNNLayer, self).__init__()
 
+        self.convlayer = convlayer
         self.label_key = label_key
         self.static_kg = static_kg
         self.k = k
+        self.hidden_channels = hidden_channels
 
         # Instantiate homogeneous GNN:
-        self.gnn = GNN_Conv(hidden_channels)
+        self.gnn = GNN_Conv(self.hidden_channels, self.convlayer)
 
         # Convert GNN model into a heterogeneous variant:
         self.gnn = to_hetero(self.gnn, metadata=data.metadata())
 
-        self.classifier = Classifier(hidden_channels)
+        self.classifier = Classifier(self.hidden_channels)
 
     def forward(self, x_dict: Dict[str, torch.Tensor], edge_index_dict: Dict[str, torch.Tensor], 
                 edge_label_index: torch.Tensor) -> torch.Tensor:
@@ -196,6 +240,7 @@ class GNN(BaseModel):
     def __init__(
         self,
         dataset: SampleEHRDataset,
+        convlayer: str,
         feature_keys: List[str],
         label_key: str,
         root: str = "static-kg/",
@@ -213,12 +258,21 @@ class GNN(BaseModel):
         )
 
         if k not in range(0, 3):
-            raise ValueError("k must be 0, 1 or 2. By default, will be set k = 0.")
+            raise ValueError("k must be 0, 1 or 2.")
 
         for relation in static_kg:
             if relation not in ["DIAG_SYMP", "SYMP_DRUG", "DRUG_DIAG", "ANAT_DIAG", "PC_DRUG"]:
-                raise ValueError("static_kg must be one of the following: DIAG_SYMP, SYMP_DRUG, DRUG_DIAG, ANAT_DIAG, PC_DRUG. By default, will be set static_kg = ['DIAG_SYMP', 'SYMP_DRUG', 'DRUG_DIAG', 'ANAT_DIAG', 'PC_DRUG'].")
+                raise ValueError("static_kg must be one of the following: DIAG_SYMP, SYMP_DRUG, DRUG_DIAG, ANAT_DIAG, PC_DRUG.")
 
+        if convlayer not in ["GraphConv", "SAGEConv", "FiLMConv"]:
+            raise ValueError("ConvLayer must be one of the following: GraphConv, SAGEConv, FiLMConv.")
+
+        self.data_enrich = False
+        for feature in feature_keys:
+            if feature == "symptoms":
+                self.data_enrich = True
+
+        self.convlayer = convlayer
         self.root = root
         self.static_kg = static_kg
         self.k = k
@@ -239,9 +293,10 @@ class GNN(BaseModel):
 
         self.graph = self.graph_definition()
 
-        self.x_dict = X_Dict(self.k, self.static_kg, self.graph, self.embedding_dim)
+        self.x_dict = X_Dict(self.k, self.static_kg, self.data_enrich, self.graph, self.embedding_dim)
 
-        self.layer = GNNLayer(self.graph, self.label_key, self.static_kg, self.k, self.hidden_channels)
+        self.layer = GNNLayer(self.graph, self.convlayer, self.label_key, self.static_kg, self.k, 
+                              self.hidden_channels)
 
     def get_dataframe(self) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame, Union[None, Dict[str, pd.DataFrame]]]:
         """Gets the dataframe of diagnosis, procedures, symptoms and medications of patients.
@@ -401,15 +456,18 @@ class GNN(BaseModel):
 
         # =============== MAPPING SYMPTOMS ===========================
         # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
-        self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
+        if self.data_enrich:
+            self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
 
-        presents_visit_id = torch.from_numpy(self.symp_df['HADM_ID'].values)
-        presents_symptom_id = torch.from_numpy(self.symp_df['ICD9_CODE'].values)
+            presents_visit_id = torch.from_numpy(self.symp_df['HADM_ID'].values)
+            presents_symptom_id = torch.from_numpy(self.symp_df['ICD9_CODE'].values)
 
-        # Create the edge index for the relationship 'presents' between visits and symptoms
-        edge_index_visit_to_symptom = torch.stack([presents_visit_id, presents_symptom_id], dim=0)
+            # Create the edge index for the relationship 'presents' between visits and symptoms
+            edge_index_visit_to_symptom = torch.stack([presents_visit_id, presents_symptom_id], dim=0)
 
-        edge_index_visit_to_symptom = coalesce(edge_index_visit_to_symptom)
+            edge_index_visit_to_symptom = coalesce(edge_index_visit_to_symptom)
+        else:
+            edge_index_visit_to_symptom = torch.empty((2, 0), dtype=torch.int64)
 
         # =============== MAPPING DIAGNOSES ===========================
         # Substituting the values in the 'ICD9_CODE' column with the corresponding indices in the vocabulary
@@ -471,7 +529,7 @@ class GNN(BaseModel):
 
         if self.k > 0:
             for relation in self.static_kg:
-                if relation == "DIAG_SYMP":
+                if relation == "DIAG_SYMP" and self.data_enrich:
                     # =============== MAPPING DIAG_SYMP ===========================
                     # Copy the dataframe with the relationship DIAG_SYMP
                     diag_symp_df = self.stat_kg_df[relation].astype(str).copy()
@@ -567,7 +625,7 @@ class GNN(BaseModel):
                         # Initialize edge_index_pharma_to_medication as empty if the DataFrame is empty
                         edge_index_pharma_to_medication = torch.empty((2, 0), dtype=torch.int64)
 
-                elif relation == "SYMP_DRUG":
+                elif relation == "SYMP_DRUG" and self.data_enrich:
                     # =============== MAPPING SYMP_DRUG ===========================
                     # Copy the dataframe with the relationship SYMP_DRUG
                     symp_medication_df = self.stat_kg_df[relation].astype(str).copy()
@@ -613,7 +671,8 @@ class GNN(BaseModel):
         # Save node indices:
         graph["patient"].node_id = torch.arange(len(self.symp_df['SUBJECT_ID'].unique()))
         graph["visit"].node_id = torch.arange(len(self.symp_df['HADM_ID'].unique()))
-        graph["symptom"].node_id = torch.arange(len(self.symp_df['ICD9_CODE'].unique()))
+        if self.data_enrich:
+            graph["symptom"].node_id = torch.arange(len(self.symp_df['ICD9_CODE'].unique()))
         graph["procedure"].node_id = torch.arange(len(self.proc_df['ICD9_CODE_PROC'].unique()))
 
         # Nodes of Static KG
@@ -633,7 +692,8 @@ class GNN(BaseModel):
 
         # Add the edge indices:
         graph["patient", "has", "visit"].edge_index = self.edge_index_patient_to_visit
-        graph["visit", "presents", "symptom"].edge_index = self.edge_index_visit_to_symptom
+        if self.data_enrich:
+            graph["visit", "presents", "symptom"].edge_index = self.edge_index_visit_to_symptom
         graph["visit", "has", "diagnosis"].edge_index = self.edge_index_visit_to_disease
         graph["visit", "has_treat", "procedure"].edge_index = self.edge_index_visit_to_procedure
         graph["visit", "has_received", "medication"].edge_index = self.edge_index_visit_to_medication
@@ -641,7 +701,7 @@ class GNN(BaseModel):
         # Edges of Static KG
         if self.k > 0:
             for relation in self.static_kg:
-                if relation == "DIAG_SYMP":
+                if relation == "DIAG_SYMP" and self.data_enrich:
                     graph["diagnosis", "has_been_caused_by", "symptom"].edge_index = self.edge_index_disease_to_symptom
                 if (relation == "ANAT_DIAG") and (self.k == 2):
                     graph["diagnosis", "localizes", "anatomy"].edge_index = self.edge_index_anatomy_to_diagnosis
@@ -649,7 +709,7 @@ class GNN(BaseModel):
                     graph["diagnosis", "treats", "medication"].edge_index = self.edge_index_diagnosis_to_medication
                 if (relation == "PC_DRUG") and (self.k == 2):
                     graph["pharmaclass", "includes", "medication"].edge_index = self.edge_index_pharma_to_medication
-                if relation == "SYMP_DRUG":
+                if relation == "SYMP_DRUG" and self.data_enrich:
                     graph["symptom", "causes", "medication"].edge_index = self.edge_index_symptom_to_medication
 
 
@@ -790,9 +850,10 @@ class GNN(BaseModel):
         visit = self.symp_df["HADM_ID"].unique()
         select_visit = torch.from_numpy(visit)
  
-        self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
-        symptom = self.symp_df["ICD9_CODE"].unique()
-        select_symptom = torch.from_numpy(symptom)
+        if self.data_enrich:
+            self.symp_df['ICD9_CODE'] = self.symp_df['ICD9_CODE'].map(self.icd9_symp_dict)
+            symptom = self.symp_df["ICD9_CODE"].unique()
+            select_symptom = torch.from_numpy(symptom)
  
         if self.label_key == "medications":
             self.diag_df['ICD9_CODE'] = self.diag_df['ICD9_CODE'].map(self.icd9_diag_dict)
@@ -808,9 +869,15 @@ class GNN(BaseModel):
         select_procedure = torch.from_numpy(procedure)
  
         if self.label_key == "medications":
-            subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "diagnosis": select_disease})
+            if self.data_enrich:
+                subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "diagnosis": select_disease})
+            else:
+                subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "procedure": select_procedure, "diagnosis": select_disease})
         else:
-            subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "medication": select_medication})
+            if self.data_enrich:
+                subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "symptom": select_symptom, "procedure": select_procedure, "medication": select_medication})
+            else:
+                subgraph = self.graph.subgraph({"patient": select_patient, "visit": select_visit, "procedure": select_procedure, "medication": select_medication})
 
         return subgraph
 
