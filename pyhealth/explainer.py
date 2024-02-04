@@ -658,7 +658,7 @@ class HeteroGraphExplainer():
                 # Create dynamic text
                 if self.label_key == "medications":
                     # Prescription decision
-                    if self.explanation['prediction'].numpy() > 0.5:
+                    if self.explanation['prediction'].cpu().numpy() > 0.5:
                         prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the administration of the medication:"""
                         prompt_recruiter_doctors += f"""\n"{atc.lookup(atc_list[int(medication_id)])}" at visit {visit_id} and on the patient's condition. \n"""
@@ -670,7 +670,7 @@ class HeteroGraphExplainer():
 
                 elif self.label_key == "diagnosis":
                     # Prescription decision
-                    if self.explanation['prediction'].numpy() > 0.5:
+                    if self.explanation['prediction'].cpu().numpy() > 0.5:
                         prompt_recruiter_doctors += f"""You are a MEDICAL EXPERT specialised in classifying a specific medical scenario in specific areas of medicine. \n"""
                         prompt_recruiter_doctors += f"""Generate a JSON file that lists a maximum of 5 MOST RELEVANT and COMPETENT doctors/specialists in the prediction of the diagnosis:"""
                         prompt_recruiter_doctors += f"""\n"{icd.lookup(icd9_diag_list[int(diagnosis_id)])}" at visit {visit_id} and on the patient's condition. \n"""
@@ -684,7 +684,7 @@ class HeteroGraphExplainer():
 
                 if self.label_key == "medications":
                     # Prescription decision
-                    if self.explanation['prediction'].numpy() > 0.5:
+                    if self.explanation['prediction'].cpu().numpy() > 0.5:
                         prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the MEDICATION RECOMMENDATION system recommended: "{atc.lookup(atc_list[int(medication_id)])}".\n"""
                         prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the recommendation and evaluate its CORRECTNESS. \n"""
                         prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the recommended medication, emphasizing key factors. \n"""
@@ -698,7 +698,7 @@ class HeteroGraphExplainer():
                         
                 elif self.label_key == "diagnosis":
                     # Prescription decision
-                    if self.explanation['prediction'].numpy() > 0.5:
+                    if self.explanation['prediction'].cpu().numpy() > 0.5:
                         prompt_internist_doctor += f"""ANALYZE the medical scenario of Visit {visit_id}, in which the diagnosis recommendation system recommended: {icd.lookup(icd9_diag_list[int(diagnosis_id)])}.\n"""
                         prompt_internist_doctor += f"""USE MEDICAL EXPERTISE to EXPLAIN the recommendation and evaluate its CORRECTNESS. \n"""
                         prompt_internist_doctor += f"""Provide guidance on the ALIGNMENT between the patient's condition in the medical scenario and the recommended diagnosis, emphasizing key factors. \n"""
@@ -774,7 +774,6 @@ class HeteroGraphExplainer():
             # List of symptoms presented by the patient
             medical_scenario += f"**Symptoms** presented by the patient found to be important from the system (ordered by level of importance):\n\n"
 
-
             if symptoms == []:
                 medical_scenario += "- No symptoms found\n"
 
@@ -842,7 +841,7 @@ class HeteroGraphExplainer():
                     return prompt_recruiter_doctors
 
                 elif doctor_type == "Internist_Doctor":
-                    if self.explanation['prediction'].numpy() > 0.5:
+                    if self.explanation['prediction'].cpu().numpy() > 0.5:
                         prompt_internist_doctor += f"""\nCOMPOSE a summary JUSTIFYING the recommendation of the medication. HIGHLIGHT the positive and negative aspects of administering the medication to the patient taking into account the medical scenario. \n"""
                         prompt_internist_doctor += f"""Clearly articulate the rationale for administering the prescribed medication. \n"""
                         prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the recommended medication, explain why the recommendation is not justified. \n"""
@@ -871,7 +870,7 @@ class HeteroGraphExplainer():
                     return prompt_recruiter_doctors
 
                 elif doctor_type == "Internist_Doctor":
-                    if self.explanation['prediction'].numpy() > 0.5:
+                    if self.explanation['prediction'].cpu().numpy() > 0.5:
                         prompt_internist_doctor += f"""\nCOMPOSE a summary JUSTIFYING the recommendation of the diagnosis. HIGHLIGHT the positive and negative aspects of prediction the diagnosis to the patient taking into account the medical scenario. \n"""
                         prompt_internist_doctor += f"""Clearly articulate the rationale for predicting the prescribed diagnosis. \n"""
                         prompt_internist_doctor += f"""In the absence of a discernible correlation between the patient's condition and the prediction diagnosis, explain why the prediction is not justified."""
