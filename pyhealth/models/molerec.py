@@ -356,7 +356,7 @@ class MoleRecLayer(torch.nn.Module):
     def forward(
         self,
         patient_emb: torch.Tensor,
-        drugs: torch.Tensor,
+        medications: torch.Tensor,
         average_projection: torch.Tensor,
         ddi_adj: torch.Tensor,
         substructure_mask: torch.Tensor,
@@ -371,7 +371,7 @@ class MoleRecLayer(torch.nn.Module):
             patient_emb: a tensor of shape [patient, visit, num_substructures],
                 representating the relation between each patient visit and
                 each substructures.
-            drugs: a multihot tensor of shape [patient, num_labels].
+            medications: a multihot tensor of shape [patient, num_labels].
             mask: an optional tensor of shape [patient, visit] where 1
                 indicates valid visits and 0 indicates invalid visits.
             substructure_mask: tensor of shape [num_drugs, num_substructures],
@@ -387,7 +387,7 @@ class MoleRecLayer(torch.nn.Module):
                 representing the graph batch of all molecules.
             ddi_adj: an adjacency tensor for drug drug interaction
                 of shape [num_drugs, num_drugs].
-            drug_indexes: the index version of drugs (ground truth) of shape
+            drug_indexes: the index version of medications (ground truth) of shape
                 [patient, num_labels], padded with -1
         Returns:
             loss: a scalar tensor representing the loss.
@@ -423,7 +423,7 @@ class MoleRecLayer(torch.nn.Module):
 
         y_prob = torch.sigmoid(logits)
 
-        loss = self.calc_loss(logits, y_prob, ddi_adj, drugs, drug_indexes)
+        loss = self.calc_loss(logits, y_prob, ddi_adj, medications, drug_indexes)
 
         return loss, y_prob
 
@@ -435,8 +435,8 @@ class MoleRec(BaseModel):
     with Substructure-Aware Molecular Representation Learning. WWW 2023.
 
     Note:
-        This model is only for medication prediction which takes conditions
-        and procedures as feature_keys, and drugs as label_key. It only
+        This model is only for medication prediction which takes diagnosis
+        and procedures as feature_keys, and medications as label_key. It only
         operates on the visit level.
 
     Note:
@@ -456,6 +456,8 @@ class MoleRec(BaseModel):
     def __init__(
         self,
         dataset: SampleEHRDataset,
+        feature_keys: List[str],
+        label_key: str,
         embedding_dim: int = 64,
         hidden_dim: int = 64,
         num_rnn_layers: int = 1,
@@ -465,8 +467,8 @@ class MoleRec(BaseModel):
     ):
         super(MoleRec, self).__init__(
             dataset=dataset,
-            feature_keys=["conditions", "procedures"],
-            label_key="drugs",
+            feature_keys=feature_keys,
+            label_key=label_key,
             mode="multilabel",
         )
 
@@ -494,6 +496,11 @@ class MoleRec(BaseModel):
         self.feat_tokenizers = self.get_feature_tokenizers()
         self.label_tokenizer = self.get_label_tokenizer()
         self.embeddings = self.get_embedding_layers(self.feat_tokenizers, embedding_dim)
+
+        self.data_enrich = False
+        for feature in feature_keys:
+            if feature == "symptoms":
+                self.data_enrich = True
 
         self.label_size = self.label_tokenizer.get_vocabulary_size()
 
@@ -527,16 +534,25 @@ class MoleRec(BaseModel):
                     dropout=dropout if num_rnn_layers > 1 else 0,
                     batch_first=True,
                 )
-                for x in ["conditions", "procedures"]
+                for x in feature_keys
             }
         )
         num_substructures = substructure_mask.shape[1]
-        self.substructure_relation = torch.nn.Sequential(
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_dim * 2, hidden_dim),
-            torch.nn.ReLU(),
-            torch.nn.Linear(hidden_dim, num_substructures),
-        )
+        if self.data_enrich:
+            self.substructure_relation = torch.nn.Sequential(
+                torch.nn.ReLU(),
+                torch.nn.Linear(hidden_dim * 3, hidden_dim),
+                torch.nn.ReLU(),
+                torch.nn.Linear(hidden_dim, num_substructures),
+            )
+        else:
+            self.substructure_relation = torch.nn.Sequential(
+                torch.nn.ReLU(),
+                torch.nn.Linear(hidden_dim * 2, hidden_dim),
+                torch.nn.ReLU(),
+                torch.nn.Linear(hidden_dim, num_substructures),
+            )
+
         self.layer = MoleRecLayer(
             hidden_size=hidden_dim, dropout=dropout, GNN_layers=num_gnn_layers, **kwargs
         )
@@ -608,7 +624,7 @@ class MoleRec(BaseModel):
         molecule_set, average_index = [], []
         for smiles_list in self.all_smiles_list:
             """Create each data with the above defined functions."""
-            counter = 0  # counter how many drugs are under that ATC-3
+            counter = 0  # counter how many medications are under that ATC-3
             for smiles in smiles_list:
                 mol = Chem.MolFromSmiles(smiles)
                 if mol is None:
@@ -638,19 +654,22 @@ class MoleRec(BaseModel):
 
     def forward(
         self,
-        conditions: List[List[List[str]]],
+        diagnosis: List[List[List[str]]],
         procedures: List[List[List[str]]],
-        drugs: List[List[str]],
+        symptoms: List[List[List[str]]],
+        medications: List[List[str]],
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
         """Forward propagation.
 
         Args:
-            conditions: a nested list in three levels with
+            diagnosis: a nested list in three levels with
                 shape [patient, visit, condition].
             procedures: a nested list in three levels with
                 shape [patient, visit, procedure].
-            drugs: a nested list in two levels [patient, drug].
+            symptoms: a nested list in three levels with
+                shape [patient, visit, symptom].
+            medications: a nested list in two levels [patient, drug].
 
         Returns:
             A dictionary with the following keys:
@@ -663,7 +682,7 @@ class MoleRec(BaseModel):
 
         # prepare labels
         labels_index = self.label_tokenizer.batch_encode_2d(
-            drugs, padding=False, truncation=False
+            medications, padding=False, truncation=False
         )
         # convert to multihot
         labels = batch_to_multihot(labels_index, self.label_size)
@@ -678,17 +697,21 @@ class MoleRec(BaseModel):
         index_labels = index_labels.to(self.device)
 
         # encoding procs and diags
-        condition_emb = self.encode_patient("conditions", conditions)
+        condition_emb = self.encode_patient("diagnosis", diagnosis)
         procedure_emb = self.encode_patient("procedures", procedures)
-        mask = torch.sum(condition_emb, dim=2) != 0
+        if self.data_enrich:
+            symptom_emb = self.encode_patient("symptoms", symptoms)
+            patient_emb = torch.cat([condition_emb, procedure_emb, symptom_emb], dim=-1)
+        else:
+            patient_emb = torch.cat([condition_emb, procedure_emb], dim=-1)
 
-        patient_emb = torch.cat([condition_emb, procedure_emb], dim=-1)
+        mask = torch.sum(condition_emb, dim=2) != 0
         substruct_rela = self.substructure_relation(patient_emb)
 
         # calculate loss
         loss, y_prob = self.layer(
             patient_emb=substruct_rela,
-            drugs=labels,
+            medications=labels,
             ddi_adj=self.ddi_adj,
             average_projection=self.average_projection,
             substructure_mask=self.substructure_mask,

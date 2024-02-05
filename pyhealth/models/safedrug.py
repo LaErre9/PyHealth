@@ -138,7 +138,7 @@ class SafeDrugLayer(nn.Module):
             - C <int>: molecular_size
         average_projection: a tensor of shape [num_drugs, num_molecules] representing
             the average projection for aggregating multiple molecules of the
-            same drug into one vector.
+            same medication into one vector.
         kp: correcting factor for the proportional signal. Default is 0.5.
         target_ddi: DDI acceptance rate. Default is 0.08.
     """
@@ -239,21 +239,21 @@ class SafeDrugLayer(nn.Module):
     def forward(
         self,
         patient_emb: torch.tensor,
-        drugs: torch.tensor,
+        medications: torch.tensor,
         mask: Optional[torch.tensor] = None,
     ) -> Tuple[torch.tensor, torch.tensor]:
         """Forward propagation.
 
         Args:
             patient_emb: a tensor of shape [patient, visit, input_size].
-            drugs: a multihot tensor of shape [patient, num_labels].
+            medications: a multihot tensor of shape [patient, num_labels].
             mask: an optional tensor of shape [patient, visit] where 1
                 indicates valid visits and 0 indicates invalid visits.
 
         Returns:
             loss: a scalar tensor representing the loss.
             y_prob: a tensor of shape [patient, num_labels] representing
-                the probability of each drug.
+                the probability of each medication.
         """
         if mask is None:
             mask = torch.ones_like(patient_emb[:, :, 0])
@@ -281,7 +281,7 @@ class SafeDrugLayer(nn.Module):
 
         # calculate the ddi_loss by PID stragegy and add to final loss
         y_prob = torch.sigmoid(logits)
-        loss, ddi_loss = self.calculate_loss(logits, y_prob, drugs)
+        loss, ddi_loss = self.calculate_loss(logits, y_prob, medications)
 
         return loss, ddi_loss, y_prob
 
@@ -293,8 +293,8 @@ class SafeDrug(BaseModel):
     Recommending Effective and Safe Drug Combinations. IJCAI 2021.
 
     Note:
-        This model is only for medication prediction which takes conditions
-        and procedures as feature_keys, and drugs as label_key. It only operates
+        This model is only for medication prediction which takes diagnosis
+        and procedures as feature_keys, and medications as label_key. It only operates
         on the visit level.
 
     Note:
@@ -313,6 +313,8 @@ class SafeDrug(BaseModel):
     def __init__(
         self,
         dataset: SampleEHRDataset,
+        feature_keys: List[str],
+        label_key: str,
         embedding_dim: int = 128,
         hidden_dim: int = 128,
         num_layers: int = 1,
@@ -321,8 +323,8 @@ class SafeDrug(BaseModel):
     ):
         super(SafeDrug, self).__init__(
             dataset=dataset,
-            feature_keys=["conditions", "procedures"],
-            label_key="drugs",
+            feature_keys=feature_keys,
+            label_key=label_key,
             mode="multilabel",
         )
         self.embedding_dim = embedding_dim
@@ -334,7 +336,12 @@ class SafeDrug(BaseModel):
         self.label_tokenizer = self.get_label_tokenizer()
         self.embeddings = self.get_embedding_layers(self.feat_tokenizers, embedding_dim)
 
-        # drug space size
+        self.data_enrich = False
+        for feature in feature_keys:
+            if feature == "symptoms":
+                self.data_enrich = True
+
+        # medication space size
         self.label_size = self.label_tokenizer.get_vocabulary_size()
 
         self.all_smiles_list = self.generate_smiles_list()
@@ -360,10 +367,23 @@ class SafeDrug(BaseModel):
             dropout=dropout if num_layers > 1 else 0,
             batch_first=True,
         )
-        self.query = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 2, hidden_dim),
-        )
+        if self.data_enrich:
+            self.symp_rnn = nn.GRU(
+                embedding_dim,
+                hidden_dim,
+                num_layers=num_layers,
+                dropout=dropout if num_layers > 1 else 0,
+                batch_first=True,
+            )
+            self.query = nn.Sequential(
+                nn.ReLU(),
+                nn.Linear(hidden_dim * 3, hidden_dim),
+            )
+        else:
+            self.query = nn.Sequential(
+                nn.ReLU(),
+                nn.Linear(hidden_dim * 2, hidden_dim),
+            )
 
         # validate kwargs for GAMENet layer
         if "hidden_size" in kwargs:
@@ -517,7 +537,7 @@ class SafeDrug(BaseModel):
 
         for smiles_list in self.all_smiles_list:
             """Create each data with the above defined functions."""
-            counter = 0  # counter how many drugs are under that ATC-3
+            counter = 0  # counter how many medications are under that ATC-3
             for smiles in smiles_list:
                 mol = Chem.MolFromSmiles(smiles)
                 if mol is None:
@@ -552,369 +572,37 @@ class SafeDrug(BaseModel):
 
     def forward(
         self,
-        conditions: List[List[List[str]]],
-        procedures: List[List[List[str]]],
-        drugs: List[List[str]],
-        **kwargs,
-    ) -> Dict[str, torch.Tensor]:
-        """Forward propagation.
-
-        Args:
-            conditions: a nested list in three levels [patient, visit, condition].
-            procedures: a nested list in three levels [patient, visit, procedure].
-            drugs: a nested list in two levels [patient, drug].
-
-        Returns:
-            A dictionary with the following keys:
-                loss: a scalar tensor representing the loss.
-                y_prob: a tensor of shape [patient, visit, num_labels] representing
-                    the probability of each drug.
-                y_true: a tensor of shape [patient, visit, num_labels] representing
-                    the ground truth of each drug.
-        """
-        conditions = self.feat_tokenizers["conditions"].batch_encode_3d(conditions)
-        # (patient, visit, code)
-        conditions = torch.tensor(conditions, dtype=torch.long, device=self.device)
-        # (patient, visit, code, embedding_dim)
-        conditions = self.embeddings["conditions"](conditions)
-        # (patient, visit, embedding_dim)
-        conditions = torch.sum(conditions, dim=2)
-        # (batch, visit, hidden_size)
-        conditions, _ = self.cond_rnn(conditions)
-
-        procedures = self.feat_tokenizers["procedures"].batch_encode_3d(procedures)
-        # (patient, visit, code)
-        procedures = torch.tensor(procedures, dtype=torch.long, device=self.device)
-        # (patient, visit, code, embedding_dim)
-        procedures = self.embeddings["procedures"](procedures)
-        # (patient, visit, embedding_dim)
-        procedures = torch.sum(procedures, dim=2)
-        # (batch, visit, hidden_size)
-        procedures, _ = self.proc_rnn(procedures)
-
-        # (batch, visit, 2 * hidden_size)
-        patient_emb = torch.cat([conditions, procedures], dim=-1)
-        # (batch, visit, hidden_size)
-        patient_emb = self.query(patient_emb)
-
-        # get mask
-        mask = torch.sum(conditions, dim=2) != 0
-
-        drugs = self.prepare_labels(drugs, self.label_tokenizer)
-
-        loss, ddi_loss, y_prob = self.safedrug(patient_emb, drugs, mask)
-
-        return {
-            "loss": loss,
-            "ddi_loss": ddi_loss,
-            "y_prob": y_prob,
-            "y_true": drugs,
-        }
-
-class SafeDrug_Mod(BaseModel):
-    """SafeDrug model.
-
-    Paper: Chaoqi Yang et al. SafeDrug: Dual Molecular Graph Encoders for
-    Recommending Effective and Safe Drug Combinations. IJCAI 2021.
-
-    Note:
-        This model is only for medication prediction which takes conditions
-        and procedures as feature_keys, and drugs as label_key. It only operates
-        on the visit level.
-
-    Note:
-        This model only accepts ATC level 3 as medication codes.
-
-    Args:
-        dataset: the dataset to train the model. It is used to query certain
-            information such as the set of all tokens.
-        embedding_dim: the embedding dimension. Default is 128.
-        hidden_dim: the hidden dimension. Default is 128.
-        num_layers: the number of layers used in RNN. Default is 1.
-        dropout: the dropout rate. Default is 0.5.
-        **kwargs: other parameters for the SafeDrug layer.
-    """
-
-    def __init__(
-        self,
-        dataset: SampleEHRDataset,
-        embedding_dim: int = 128,
-        hidden_dim: int = 128,
-        num_layers: int = 1,
-        dropout: float = 0.5,
-        **kwargs,
-    ):
-        super(SafeDrug_Mod, self).__init__(
-            dataset=dataset,
-            feature_keys=["conditions", "procedures", "symptoms"],
-            label_key="drugs",
-            mode="multilabel",
-        )
-        self.embedding_dim = embedding_dim
-        self.hidden_dim = hidden_dim
-        self.num_layers = num_layers
-        self.dropout = dropout
-
-        self.feat_tokenizers = self.get_feature_tokenizers()
-        self.label_tokenizer = self.get_label_tokenizer()
-        self.embeddings = self.get_embedding_layers(self.feat_tokenizers, embedding_dim)
-
-        # drug space size
-        self.label_size = self.label_tokenizer.get_vocabulary_size()
-
-        self.all_smiles_list = self.generate_smiles_list()
-        mask_H = self.generate_mask_H()
-        (
-            molecule_set,
-            num_fingerprints,
-            average_projection,
-        ) = self.generate_molecule_info()
-        ddi_adj = self.generate_ddi_adj()
-
-        self.cond_rnn = nn.GRU(
-            embedding_dim,
-            hidden_dim,
-            num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0,
-            batch_first=True,
-        )
-        self.proc_rnn = nn.GRU(
-            embedding_dim,
-            hidden_dim,
-            num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0,
-            batch_first=True,
-        )
-        self.symp_rnn = nn.GRU(
-            embedding_dim,
-            hidden_dim,
-            num_layers=num_layers,
-            dropout=dropout if num_layers > 1 else 0,
-            batch_first=True,
-        )
-        self.query = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 3, hidden_dim),
-        )
-
-        # validate kwargs for GAMENet layer
-        if "hidden_size" in kwargs:
-            raise ValueError("hidden_size is determined by hidden_dim")
-        if "mask_H" in kwargs:
-            raise ValueError("mask_H is determined by the dataset")
-        if "ddi_adj" in kwargs:
-            raise ValueError("ddi_adj is determined by the dataset")
-        if "num_fingerprints" in kwargs:
-            raise ValueError("num_fingerprints is determined by the dataset")
-        if "molecule_set" in kwargs:
-            raise ValueError("molecule_set is determined by the dataset")
-        if "average_projection" in kwargs:
-            raise ValueError("average_projection is determined by the dataset")
-        self.safedrug_mod = SafeDrugLayer(
-            hidden_size=hidden_dim,
-            mask_H=mask_H,
-            ddi_adj=ddi_adj,
-            num_fingerprints=num_fingerprints,
-            molecule_set=molecule_set,
-            average_projection=average_projection,
-            **kwargs,
-        )
-
-    def generate_ddi_adj(self) -> torch.tensor:
-        """Generates the DDI graph adjacency matrix."""
-        atc = ATC()
-        ddi = atc.get_ddi(gamenet_ddi=True)
-        label_size = self.label_tokenizer.get_vocabulary_size()
-        vocab_to_index = self.label_tokenizer.vocabulary
-        ddi_adj = np.zeros((label_size, label_size))
-        ddi_atc3 = [
-            [ATC.convert(l[0], level=3), ATC.convert(l[1], level=3)] for l in ddi
-        ]
-        for atc_i, atc_j in ddi_atc3:
-            if atc_i in vocab_to_index and atc_j in vocab_to_index:
-                ddi_adj[vocab_to_index(atc_i), vocab_to_index(atc_j)] = 1
-                ddi_adj[vocab_to_index(atc_j), vocab_to_index(atc_i)] = 1
-        ddi_adj = torch.FloatTensor(ddi_adj)
-        return ddi_adj
-
-    def generate_smiles_list(self) -> List[List[str]]:
-        """Generates the list of SMILES strings."""
-        atc3_to_smiles = {}
-        atc = ATC()
-        for code in atc.graph.nodes:
-            if len(code) != 7:
-                continue
-            code_atc3 = ATC.convert(code, level=3)
-            smiles = atc.graph.nodes[code]["smiles"]
-            if smiles != smiles:
-                continue
-            atc3_to_smiles[code_atc3] = atc3_to_smiles.get(code_atc3, []) + [smiles]
-        # just take first one for computational efficiency
-        atc3_to_smiles = {k: v[:1] for k, v in atc3_to_smiles.items()}
-        all_smiles_list = [[] for _ in range(self.label_size)]
-        vocab_to_index = self.label_tokenizer.vocabulary
-        for atc3, smiles_list in atc3_to_smiles.items():
-            if atc3 in vocab_to_index:
-                index = vocab_to_index(atc3)
-                all_smiles_list[index] += smiles_list
-        return all_smiles_list
-
-    def generate_mask_H(self) -> torch.tensor:
-        """Generates the molecular segmentation mask H."""
-        all_substructures_list = [[] for _ in range(self.label_size)]
-        for index, smiles_list in enumerate(self.all_smiles_list):
-            for smiles in smiles_list:
-                mol = Chem.MolFromSmiles(smiles)
-                if mol is None:
-                    continue
-                substructures = BRICS.BRICSDecompose(mol)
-                all_substructures_list[index] += substructures
-        # all segment set
-        substructures_set = list(set(sum(all_substructures_list, [])))
-        # mask_H
-        mask_H = np.zeros((self.label_size, len(substructures_set)))
-        for index, substructures in enumerate(all_substructures_list):
-            for s in substructures:
-                mask_H[index, substructures_set.index(s)] = 1
-        mask_H = torch.FloatTensor(mask_H)
-        return mask_H
-
-    def generate_molecule_info(self, radius: int = 1):
-        """Generates the molecule information."""
-
-        def create_atoms(mol, atom2idx):
-            """Transform the atom types in a molecule (e.g., H, C, and O)
-            into the indices (e.g., H=0, C=1, and O=2). Note that each atom
-            index considers the aromaticity.
-            """
-            atoms = [a.GetSymbol() for a in mol.GetAtoms()]
-            for a in mol.GetAromaticAtoms():
-                i = a.GetIdx()
-                atoms[i] = (atoms[i], "aromatic")
-            atoms = [atom2idx[a] for a in atoms]
-            return np.array(atoms)
-
-        def create_ijbonddict(mol, bond2idx):
-            """Create a dictionary, in which each key is a node ID
-            and each value is the tuples of its neighboring node
-            and chemical bond (e.g., single and double) IDs.
-            """
-            i_jbond_dict = defaultdict(lambda: [])
-            for b in mol.GetBonds():
-                i, j = b.GetBeginAtomIdx(), b.GetEndAtomIdx()
-                bond = bond2idx[str(b.GetBondType())]
-                i_jbond_dict[i].append((j, bond))
-                i_jbond_dict[j].append((i, bond))
-            return i_jbond_dict
-
-        def extract_fingerprints(r, atoms, i_jbond_dict, fingerprint2idx, edge2idx):
-            """Extract the fingerprints from a molecular graph
-            based on Weisfeiler-Lehman algorithm.
-            """
-            nodes = [fingerprint2idx[a] for a in atoms]
-            i_jedge_dict = i_jbond_dict
-
-            for _ in range(r):
-
-                """Update each node ID considering its neighboring nodes and edges.
-                The updated node IDs are the fingerprint IDs.
-                """
-                nodes_ = deepcopy(nodes)
-                for i, j_edge in i_jedge_dict.items():
-                    neighbors = [(nodes[j], edge) for j, edge in j_edge]
-                    fingerprint = (nodes[i], tuple(sorted(neighbors)))
-                    nodes_[i] = fingerprint2idx[fingerprint]
-
-                """Also update each edge ID considering
-                its two nodes on both sides.
-                """
-                i_jedge_dict_ = defaultdict(list)
-                for i, j_edge in i_jedge_dict.items():
-                    for j, edge in j_edge:
-                        both_side = tuple(sorted((nodes[i], nodes[j])))
-                        edge = edge2idx[(both_side, edge)]
-                        i_jedge_dict_[i].append((j, edge))
-
-                nodes = deepcopy(nodes_)
-                i_jedge_dict = deepcopy(i_jedge_dict_)
-                del nodes_, i_jedge_dict_
-
-            return np.array(nodes)
-
-        atom2idx = defaultdict(lambda: len(atom2idx))
-        bond2idx = defaultdict(lambda: len(bond2idx))
-        fingerprint2idx = defaultdict(lambda: len(fingerprint2idx))
-        edge2idx = defaultdict(lambda: len(edge2idx))
-        molecule_set, average_index = [], []
-
-        for smiles_list in self.all_smiles_list:
-            """Create each data with the above defined functions."""
-            counter = 0  # counter how many drugs are under that ATC-3
-            for smiles in smiles_list:
-                mol = Chem.MolFromSmiles(smiles)
-                if mol is None:
-                    continue
-                mol = Chem.AddHs(mol)
-                atoms = create_atoms(mol, atom2idx)
-                molecular_size = len(atoms)
-                i_jbond_dict = create_ijbonddict(mol, bond2idx)
-                fingerprints = extract_fingerprints(
-                    radius, atoms, i_jbond_dict, fingerprint2idx, edge2idx
-                )
-                adjacency = Chem.GetAdjacencyMatrix(mol)
-                """Transform the above each data of numpy to pytorch tensor."""
-                fingerprints = torch.LongTensor(fingerprints)
-                adjacency = torch.FloatTensor(adjacency)
-                molecule_set.append((fingerprints, adjacency, molecular_size))
-                counter += 1
-            average_index.append(counter)
-
-        num_fingerprints = len(fingerprint2idx)
-        # transform into projection matrix
-        n_col = sum(average_index)
-        n_row = len(average_index)
-        average_projection = np.zeros((n_row, n_col))
-        col_counter = 0
-        for i, item in enumerate(average_index):
-            if item > 0:
-                average_projection[i, col_counter : col_counter + item] = 1 / item
-            col_counter += item
-        average_projection = torch.FloatTensor(average_projection)
-        return molecule_set, num_fingerprints, average_projection
-
-    def forward(
-        self,
-        conditions: List[List[List[str]]],
+        diagnosis: List[List[List[str]]],
         procedures: List[List[List[str]]],
         symptoms: List[List[List[str]]],
-        drugs: List[List[str]],
+        medications: List[List[str]],
         **kwargs,
     ) -> Dict[str, torch.Tensor]:
         """Forward propagation.
 
         Args:
-            conditions: a nested list in three levels [patient, visit, condition].
+            diagnosis: a nested list in three levels [patient, visit, condition].
             procedures: a nested list in three levels [patient, visit, procedure].
             symptoms: a nested list in three levels [patient, visit, symptom].
-            drugs: a nested list in two levels [patient, drug].
+            medications: a nested list in two levels [patient, medication].
 
         Returns:
             A dictionary with the following keys:
                 loss: a scalar tensor representing the loss.
                 y_prob: a tensor of shape [patient, visit, num_labels] representing
-                    the probability of each drug.
+                    the probability of each medication.
                 y_true: a tensor of shape [patient, visit, num_labels] representing
-                    the ground truth of each drug.
+                    the ground truth of each medication.
         """
-        conditions = self.feat_tokenizers["conditions"].batch_encode_3d(conditions)
+        diagnosis = self.feat_tokenizers["diagnosis"].batch_encode_3d(diagnosis)
         # (patient, visit, code)
-        conditions = torch.tensor(conditions, dtype=torch.long, device=self.device)
+        diagnosis = torch.tensor(diagnosis, dtype=torch.long, device=self.device)
         # (patient, visit, code, embedding_dim)
-        conditions = self.embeddings["conditions"](conditions)
+        diagnosis = self.embeddings["diagnosis"](diagnosis)
         # (patient, visit, embedding_dim)
-        conditions = torch.sum(conditions, dim=2)
+        diagnosis = torch.sum(diagnosis, dim=2)
         # (batch, visit, hidden_size)
-        conditions, _ = self.cond_rnn(conditions)
+        diagnosis, _ = self.cond_rnn(diagnosis)
 
         procedures = self.feat_tokenizers["procedures"].batch_encode_3d(procedures)
         # (patient, visit, code)
@@ -926,31 +614,35 @@ class SafeDrug_Mod(BaseModel):
         # (batch, visit, hidden_size)
         procedures, _ = self.proc_rnn(procedures)
 
-        symptoms = self.feat_tokenizers["symptoms"].batch_encode_3d(symptoms)
-        # (patient, visit, code)
-        symptoms = torch.tensor(symptoms, dtype=torch.long, device=self.device)
-        # (patient, visit, code, embedding_dim)
-        symptoms = self.embeddings["symptoms"](symptoms)
-        # (patient, visit, embedding_dim)
-        symptoms = torch.sum(symptoms, dim=2)
-        # (batch, visit, hidden_size)
-        symptoms, _ = self.symp_rnn(symptoms)
+        if self.data_enrich:
+            symptoms = self.feat_tokenizers["symptoms"].batch_encode_3d(symptoms)
+            # (patient, visit, code)
+            symptoms = torch.tensor(symptoms, dtype=torch.long, device=self.device)
+            # (patient, visit, code, embedding_dim)
+            symptoms = self.embeddings["symptoms"](symptoms)
+            # (patient, visit, embedding_dim)
+            symptoms = torch.sum(symptoms, dim=2)
+            # (batch, visit, hidden_size)
+            symptoms, _ = self.symp_rnn(symptoms)
 
         # (batch, visit, 2 * hidden_size)
-        patient_emb = torch.cat([conditions, procedures, symptoms], dim=-1)
+        if self.data_enrich:
+            patient_emb = torch.cat([diagnosis, procedures, symptoms], dim=-1)
+        else:
+            patient_emb = torch.cat([diagnosis, procedures], dim=-1)
         # (batch, visit, hidden_size)
         patient_emb = self.query(patient_emb)
 
         # get mask
-        mask = torch.sum(conditions, dim=2) != 0
+        mask = torch.sum(diagnosis, dim=2) != 0
 
-        drugs = self.prepare_labels(drugs, self.label_tokenizer)
+        medications = self.prepare_labels(medications, self.label_tokenizer)
 
-        loss, ddi_loss, y_prob = self.safedrug_mod(patient_emb, drugs, mask)
+        loss, ddi_loss, y_prob = self.safedrug(patient_emb, medications, mask)
 
         return {
             "loss": loss,
             "ddi_loss": ddi_loss,
             "y_prob": y_prob,
-            "y_true": drugs,
+            "y_true": medications,
         }

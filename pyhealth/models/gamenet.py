@@ -127,12 +127,12 @@ class GAMENetLayer(nn.Module):
     Examples:
         >>> from pyhealth.models import GAMENetLayer
         >>> queries = torch.randn(3, 5, 32) # [patient, visit, hidden_size]
-        >>> prev_drugs = torch.randint(0, 2, (3, 4, 50)).float()
-        >>> curr_drugs = torch.randint(0, 2, (3, 50)).float()
+        >>> prev_medications = torch.randint(0, 2, (3, 4, 50)).float()
+        >>> curr_medications = torch.randint(0, 2, (3, 50)).float()
         >>> ehr_adj = torch.randint(0, 2, (50, 50)).float()
         >>> ddi_adj = torch.randint(0, 2, (50, 50)).float()
         >>> layer = GAMENetLayer(32, ehr_adj, ddi_adj)
-        >>> loss, y_prob = layer(queries, prev_drugs, curr_drugs)
+        >>> loss, y_prob = layer(queries, prev_medications, curr_medications)
         >>> loss.shape
         torch.Size([])
         >>> y_prob.shape
@@ -162,17 +162,17 @@ class GAMENetLayer(nn.Module):
     def forward(
         self,
         queries: torch.tensor,
-        prev_drugs: torch.tensor,
-        curr_drugs: torch.tensor,
+        prev_medications: torch.tensor,
+        curr_medications: torch.tensor,
         mask: Optional[torch.tensor] = None,
     ) -> Tuple[torch.tensor, torch.tensor]:
         """Forward propagation.
 
         Args:
             queries: query tensor of shape [patient, visit, hidden_size].
-            prev_drugs: multihot tensor indicating drug usage in all previous
+            prev_medications: multihot tensor indicating medication usage in all previous
                 visits of shape [patient, visit - 1, num_drugs].
-            curr_drugs: multihot tensor indicating drug usage in the current
+            curr_medications: multihot tensor indicating medication usage in the current
                 visit of shape [patient, num_drugs].
             mask: an optional mask tensor of shape [patient, visit] where 1
                 indicates valid visits and 0 indicates invalid visits.
@@ -180,7 +180,7 @@ class GAMENetLayer(nn.Module):
         Returns:
             loss: a scalar tensor representing the loss.
             y_prob: a tensor of shape [patient, num_labels] representing
-                the probability of each drug.
+                the probability of each medication.
         """
         if mask is None:
             mask = torch.ones_like(queries[:, :, 0])
@@ -194,7 +194,7 @@ class GAMENetLayer(nn.Module):
 
         # dynamic memory
         DM_keys = queries[:, :-1, :]
-        DM_values = prev_drugs[:, :-1, :]
+        DM_values = prev_medications[:, :-1, :]
 
         """O: Output memory representation"""
         a_c = torch.softmax(torch.mm(query, MB.t()), dim=-1)
@@ -208,7 +208,7 @@ class GAMENetLayer(nn.Module):
         memory_output = torch.cat([query, o_b, o_d], dim=-1)
         logits = self.fc(memory_output)
 
-        loss = self.bce_loss_fn(logits, curr_drugs)
+        loss = self.bce_loss_fn(logits, curr_medications)
         y_prob = torch.sigmoid(logits)
 
         return loss, y_prob
@@ -221,8 +221,8 @@ class GAMENet(BaseModel):
     Recommending Medication Combination AAAI 2019.
 
     Note:
-        This model is only for medication prediction which takes conditions
-        and procedures as feature_keys, and drugs as label_key.
+        This model is only for medication prediction which takes diagnosis
+        and procedures as feature_keys, and medications as label_key.
         It only operates on the visit level. Thus, we have disable the 
         feature_keys, label_key, and mode arguments.
 
@@ -242,6 +242,8 @@ class GAMENet(BaseModel):
     def __init__(
         self,
         dataset: SampleEHRDataset,
+        feature_keys: List[str],
+        label_key: str,
         embedding_dim: int = 128,
         hidden_dim: int = 128,
         num_layers: int = 1,
@@ -250,8 +252,8 @@ class GAMENet(BaseModel):
     ):
         super(GAMENet, self).__init__(
             dataset=dataset,
-            feature_keys=["conditions", "procedures"],
-            label_key="drugs",
+            feature_keys=feature_keys,
+            label_key=label_key,
             mode="multilabel",
         )
         self.embedding_dim = embedding_dim
@@ -262,6 +264,11 @@ class GAMENet(BaseModel):
         self.feat_tokenizers = self.get_feature_tokenizers()
         self.label_tokenizer = self.get_label_tokenizer()
         self.embeddings = self.get_embedding_layers(self.feat_tokenizers, embedding_dim)
+
+        self.data_enrich = False
+        for feature in feature_keys:
+            if feature == "symptoms":
+                self.data_enrich = True
 
         ehr_adj = self.generate_ehr_adj()
         ddi_adj = self.generate_ddi_adj()
@@ -280,10 +287,23 @@ class GAMENet(BaseModel):
             dropout=dropout if num_layers > 1 else 0,
             batch_first=True,
         )
-        self.query = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(hidden_dim * 2, hidden_dim),
-        )
+        if self.data_enrich:
+            self.symp_rnn = nn.GRU(
+                embedding_dim,
+                hidden_dim,
+                num_layers=num_layers,
+                dropout=dropout if num_layers > 1 else 0,
+                batch_first=True,
+            )
+            self.query = nn.Sequential(
+                nn.ReLU(),
+                nn.Linear(hidden_dim * 3, hidden_dim),
+            )
+        else:
+            self.query = nn.Sequential(
+                nn.ReLU(),
+                nn.Linear(hidden_dim * 2, hidden_dim),
+            )
 
         # validate kwargs for GAMENet layer
         if "hidden_size" in kwargs:
@@ -305,8 +325,8 @@ class GAMENet(BaseModel):
         label_size = self.label_tokenizer.get_vocabulary_size()
         ehr_adj = torch.zeros((label_size, label_size))
         for sample in self.dataset:
-            curr_drugs = sample["drugs"]
-            encoded_drugs = self.label_tokenizer.convert_tokens_to_indices(curr_drugs)
+            curr_medications = sample["medications"]
+            encoded_drugs = self.label_tokenizer.convert_tokens_to_indices(curr_medications)
             for idx1, med1 in enumerate(encoded_drugs):
                 for idx2, med2 in enumerate(encoded_drugs):
                     if idx1 >= idx2:
@@ -333,38 +353,40 @@ class GAMENet(BaseModel):
 
     def forward(
         self,
-        conditions: List[List[List[str]]],
+        diagnosis: List[List[List[str]]],
         procedures: List[List[List[str]]],
+        symptoms: List[List[List[str]]],
         drugs_hist: List[List[List[str]]],
-        drugs: List[List[str]],
+        medications: List[List[str]],
         **kwargs
     ) -> Dict[str, torch.Tensor]:
         """Forward propagation.
 
         Args:
-            conditions: a nested list in three levels [patient, visit, condition].
+            diagnosis: a nested list in three levels [patient, visit, condition].
             procedures: a nested list in three levels [patient, visit, procedure].
-            drugs_hist: a nested list in three levels [patient, visit, drug], up to visit (N-1)
-            drugs: a nested list in two levels [patient, drug], at visit N
+            symptoms: a nested list in three levels [patient, visit, symptom].
+            drugs_hist: a nested list in three levels [patient, visit, medication], up to visit (N-1)
+            medications: a nested list in two levels [patient, medication], at visit N
 
         Returns:
             A dictionary with the following keys:
                 loss: a scalar tensor representing the loss.
                 y_prob: a tensor of shape [patient, visit, num_labels] representing
-                    the probability of each drug.
+                    the probability of each medication.
                 y_true: a tensor of shape [patient, visit, num_labels] representing
-                    the ground truth of each drug.
+                    the ground truth of each medication.
 
         """
-        conditions = self.feat_tokenizers["conditions"].batch_encode_3d(conditions)
+        diagnosis = self.feat_tokenizers["diagnosis"].batch_encode_3d(diagnosis)
         # (patient, visit, code)
-        conditions = torch.tensor(conditions, dtype=torch.long, device=self.device)
+        diagnosis = torch.tensor(diagnosis, dtype=torch.long, device=self.device)
         # (patient, visit, code, embedding_dim)
-        conditions = self.embeddings["conditions"](conditions)
+        diagnosis = self.embeddings["diagnosis"](diagnosis)
         # (patient, visit, embedding_dim)
-        conditions = torch.sum(conditions, dim=2)
+        diagnosis = torch.sum(diagnosis, dim=2)
         # (batch, visit, hidden_size)
-        conditions, _ = self.cond_rnn(conditions)
+        diagnosis, _ = self.cond_rnn(diagnosis)
 
         procedures = self.feat_tokenizers["procedures"].batch_encode_3d(procedures)
         # (patient, visit, code)
@@ -376,8 +398,22 @@ class GAMENet(BaseModel):
         # (batch, visit, hidden_size)
         procedures, _ = self.proc_rnn(procedures)
 
+        if self.data_enrich:
+            symptoms = self.feat_tokenizers["symptoms"].batch_encode_3d(symptoms)
+            # (patient, visit, code)
+            symptoms = torch.tensor(symptoms, dtype=torch.long, device=self.device)
+            # (patient, visit, code, embedding_dim)
+            symptoms = self.embeddings["symptoms"](symptoms)
+            # (patient, visit, embedding_dim)
+            symptoms = torch.sum(symptoms, dim=2)
+            # (batch, visit, hidden_size)
+            symptoms, _ = self.symp_rnn(symptoms)
+
         # (batch, visit, 2 * hidden_size)
-        patient_representations = torch.cat([conditions, procedures], dim=-1)
+        if self.data_enrich:
+            patient_representations = torch.cat([diagnosis, procedures, symptoms], dim=-1)
+        else:
+            patient_representations = torch.cat([diagnosis, procedures], dim=-1)
         # (batch, visit, hidden_size)
         queries = self.query(patient_representations)
 
@@ -386,23 +422,23 @@ class GAMENet(BaseModel):
             drugs_hist, padding=(False, False), truncation=(True, False)
         )
 
-        curr_drugs = self.prepare_labels(drugs, self.label_tokenizer)
+        curr_medications = self.prepare_labels(medications, self.label_tokenizer)
 
-        prev_drugs = drugs_hist
-        max_num_visit = max([len(p) for p in prev_drugs])
-        prev_drugs = [p + [[]] * (max_num_visit - len(p)) for p in prev_drugs]
-        prev_drugs = [batch_to_multihot(p, label_size) for p in prev_drugs]
-        prev_drugs = torch.stack(prev_drugs, dim=0)
-        prev_drugs = prev_drugs.to(self.device)
+        prev_medications = drugs_hist
+        max_num_visit = max([len(p) for p in prev_medications])
+        prev_medications = [p + [[]] * (max_num_visit - len(p)) for p in prev_medications]
+        prev_medications = [batch_to_multihot(p, label_size) for p in prev_medications]
+        prev_medications = torch.stack(prev_medications, dim=0)
+        prev_medications = prev_medications.to(self.device)
 
         # get mask
-        mask = torch.sum(conditions, dim=2) != 0
+        mask = torch.sum(diagnosis, dim=2) != 0
 
-        # process drugs
-        loss, y_prob = self.gamenet(queries, prev_drugs, curr_drugs, mask)
+        # process medications
+        loss, y_prob = self.gamenet(queries, prev_medications, curr_medications, mask)
 
         return {
             "loss": loss,
             "y_prob": y_prob,
-            "y_true": curr_drugs,
+            "y_true": curr_medications,
         }
