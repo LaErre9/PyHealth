@@ -793,7 +793,11 @@ class HeteroGraphExplainer():
             for procedure in procedures:
                 node_type, id = str(procedure).split('_')
                 if node_type == "procedure":
-                    procedure_icd = icdpr.lookup(icd9_proc_list[int(id)])
+                    try:
+                        procedure_icd = icdpr.lookup(icd9_proc_list[int(id)])
+                    except Exception as e:
+                        procedure_icd = "Unknown procedure"
+                    
                     medical_scenario += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
 
 
