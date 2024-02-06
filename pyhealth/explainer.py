@@ -780,7 +780,11 @@ class HeteroGraphExplainer():
             for symptom in symptoms:
                 node_type, id = str(symptom).split('_')
                 if node_type == "symptom":
-                    symptom_icd = icd.lookup(icd9_symp_list[int(id)])
+                    try:
+                        symptom_icd = icd.lookup(icd9_symp_list[int(id)])
+                    except Exception as e:
+                        symptom_icd = "Unknown symptom"
+
                     medical_scenario += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
 
 
@@ -810,7 +814,11 @@ class HeteroGraphExplainer():
             for diagnosis in diagnosis:
                 node_type, id = str(diagnosis).split('_')
                 if node_type == "diagnosis":
-                    diagnosis_icd = icd.lookup(icd9_diag_list[int(id)])
+                    try:
+                        diagnosis_icd = icd.lookup(icd9_diag_list[int(id)])
+                    except Exception as e:
+                        diagnosis_icd = "Unknown diagnosis"
+
                     medical_scenario += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
 
             # List of medications administered to the patient
@@ -822,7 +830,11 @@ class HeteroGraphExplainer():
             for medication in medications:
                 node_type, id = str(medication).split('_')
                 if node_type == "medication":
-                    medication_atc = atc.lookup(atc_list[int(id)])
+                    try:
+                        medication_atc = atc.lookup(atc_list[int(id)])
+                    except Exception as e:
+                        medication_atc = "Unknown medication"
+                        
                     medical_scenario += "- " + medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
 
             with open(f'{self.root}medical_scenario.txt', 'w') as file:
