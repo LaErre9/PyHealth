@@ -26,10 +26,12 @@ def compute_class_weights(y_true):
 
     zero_count = torch.sum(y_true == 0)
     zero_ratio = (1 / zero_count) * (len(y_true) / 2.0)
+    zero_ratio = torch.sqrt(zero_ratio)
     # print("Zero ratio: ", zero_ratio)
 
     one_count = torch.sum(y_true == 1)
     one_ratio = (1 / one_count) * (len(y_true) / 2.0)
+    one_ratio = torch.sqrt(one_ratio)
     # print("One ratio: ", one_ratio)
 
     class_weights = torch.tensor([zero_ratio, one_ratio]).to(y_true.device)
