@@ -358,15 +358,17 @@ class HeteroGraphExplainer():
         icd9_symp_list = sorted(self.icd9_symp_dict.keys(), key=lambda x: self.icd9_symp_dict[x])
 
         # MI PRENDO I NODI PIU' IMPORTANTI
-        nodess = {}
+        nodes_int = {}
+        nodes_expl = {}
         for node_type, node_data in self.explanation.node_items():
             for i in range(node_data['node_mask'].shape[0]):
                 node_id = f"{node_type}_{i}"
                 node_mask = node_data['node_mask'][i]
 
                 if node_mask.max() > 0:
-                    if node_id not in nodess:
-                        nodess.update({node_id: node_mask.max().item()})
+                    if node_id not in nodes_int:
+                        
+                        nodes_int.update({node_id: node_mask.max().item()})
 
                         if human_readable:
                             node_type_d, id = str(node_id).split('_')
@@ -375,6 +377,8 @@ class HeteroGraphExplainer():
                                 print(f"{node_type} {id} {symptom_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
+                                nodes_expl.update({symptom_icd: node_mask.max().item()})
+
                                 self.G.add_node(symptom_icd, type=node_type, size=node_size)
                             
                             elif node_type_d == "procedure":
@@ -382,6 +386,7 @@ class HeteroGraphExplainer():
                                 print(f"{node_type} {id} {procedure_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
+                                nodes_expl.update({procedure_icd: node_mask.max().item()})
                                 self.G.add_node(procedure_icd, type=node_type, size=node_size)
 
                             elif node_type_d == "diagnosis":
@@ -389,6 +394,7 @@ class HeteroGraphExplainer():
                                 print(f"{node_type} {id} {diagnosis_icd} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
+                                nodes_expl.update({diagnosis_icd: node_mask.max().item()})
                                 self.G.add_node(diagnosis_icd, type=node_type, size=node_size)
 
                             elif node_type_d == "medication":
@@ -396,6 +402,7 @@ class HeteroGraphExplainer():
                                 print(f"{node_type} {id} {medication_atc} Importance: " + str(node_mask.max()))
                                 # Calcola la dimensione del nodo
                                 node_size = max(10, node_mask.max().item() * 20)
+                                nodes_expl.update({medication_atc: node_mask.max().item()})
                                 self.G.add_node(medication_atc, type=node_type, size=node_size)
 
                             # if k >= 2:
@@ -414,11 +421,13 @@ class HeteroGraphExplainer():
                             elif node_type_d == "patient":
                                 print(f"{node_type} {id} Importance: " + str(node_mask.max()))
                                 node_size = max(10, node_mask.max().item() * 20)
+                                nodes_expl.update({node_id: node_mask.max().item()})
                                 self.G.add_node(node_id, type=node_type, size=node_size)
 
                             elif node_type_d == "visit":
                                 print(f"{node_type} {id} Importance: " + str(node_mask.max()))
                                 node_size = max(10, node_mask.max().item() * 20)
+                                nodes_expl.update({node_id: node_mask.max().item()})
                                 self.G.add_node(node_id, type=node_type, size=node_size)
                         else:
                             print(f"{node_type} {i} Importance: " + str(node_mask.max()))
@@ -426,7 +435,8 @@ class HeteroGraphExplainer():
                             node_size = max(10, node_mask.max().item() * 20)
                             self.G.add_node(node_id, type=node_type, size=node_size)
 
-        self.nodess = nodess
+        self.nodes_expl = nodes_expl
+        self.nodes_int = nodes_int
         
         for edge_type, edge_data in [(edge[0], edge[1]) for edge in self.explanation.edge_items()]:
             for i in range(edge_data['edge_index'].shape[1]):
@@ -438,60 +448,60 @@ class HeteroGraphExplainer():
                 # if edge_mask > 0:
                     # print(source_id + " -> " + target_id + " Importance: " + str(edge_mask))
                 if human_readable:
-                    if source_id in self.nodess.keys() and target_id in self.nodess.keys():
-                        source_id_d, id_s = str(source_id).split('_')
-                        target_id_d, id_t = str(target_id).split('_')
+                    source_id_d, id_s = str(source_id).split('_')
+                    target_id_d, id_t = str(target_id).split('_')
 
-                        ############ SOURCE ID ###########
-                        if source_id_d == "symptom":
-                            symptom_icd = icd.lookup(icd9_symp_list[int(id_s)])
-                            source_id = symptom_icd
+                    ############ SOURCE ID ###########
+                    if source_id_d == "symptom":
+                        symptom_icd = icd.lookup(icd9_symp_list[int(id_s)])
+                        source_id = symptom_icd
 
-                        elif source_id_d == "procedure":
-                            procedure_icd = icdpr.lookup(icd9_proc_list[int(id_s)])
-                            source_id = procedure_icd
+                    elif source_id_d == "procedure":
+                        procedure_icd = icdpr.lookup(icd9_proc_list[int(id_s)])
+                        source_id = procedure_icd
 
-                        elif source_id_d == "diagnosis":
-                            diagnosis_icd = icd.lookup(icd9_diag_list[int(id_s)])
-                            source_id = diagnosis_icd
+                    elif source_id_d == "diagnosis":
+                        diagnosis_icd = icd.lookup(icd9_diag_list[int(id_s)])
+                        source_id = diagnosis_icd
 
-                        elif source_id_d == "medication":
-                            medication_atc = atc.lookup(atc_list[int(id_s)])
-                            source_id = medication_atc
+                    elif source_id_d == "medication":
+                        medication_atc = atc.lookup(atc_list[int(id_s)])
+                        source_id = medication_atc
 
-                        elif source_id_d == "patient":
-                            source_id = source_id
+                    elif source_id_d == "patient":
+                        source_id = source_id
 
-                        elif source_id_d == "visit":
-                            source_id = source_id
+                    elif source_id_d == "visit":
+                        source_id = source_id
 
-                        ############ TARGET ID ############
-                        if target_id_d == "symptom":
-                            symptom_icd = icd.lookup(icd9_symp_list[int(id_t)])
-                            target_id = symptom_icd
+                    ############ TARGET ID ############
+                    if target_id_d == "symptom":
+                        symptom_icd = icd.lookup(icd9_symp_list[int(id_t)])
+                        target_id = symptom_icd
 
-                        elif target_id_d == "procedure":
-                            procedure_icd = icdpr.lookup(icd9_proc_list[int(id_t)])
-                            target_id = procedure_icd
+                    elif target_id_d == "procedure":
+                        procedure_icd = icdpr.lookup(icd9_proc_list[int(id_t)])
+                        target_id = procedure_icd
 
-                        elif target_id_d == "diagnosis":
-                            diagnosis_icd = icd.lookup(icd9_diag_list[int(id_t)])
-                            target_id = diagnosis_icd
+                    elif target_id_d == "diagnosis":
+                        diagnosis_icd = icd.lookup(icd9_diag_list[int(id_t)])
+                        target_id = diagnosis_icd
 
-                        elif target_id_d == "medication":
-                            medication_atc = atc.lookup(atc_list[int(id_t)])
-                            target_id = medication_atc
+                    elif target_id_d == "medication":
+                        medication_atc = atc.lookup(atc_list[int(id_t)])
+                        target_id = medication_atc
 
-                        elif target_id_d == "patient":
-                            target_id = target_id
+                    elif target_id_d == "patient":
+                        target_id = target_id
 
-                        elif target_id_d == "visit":
-                            target_id = target_id
+                    elif target_id_d == "visit":
+                        target_id = target_id
 
+                    if source_id in self.nodes_expl.keys() and target_id in self.nodes_expl.keys():
                         self.G.add_edge(source_id, target_id, type=(edge_type[0], edge_type[2]))
 
                 else:
-                    if source_id in self.nodess.keys() and target_id in self.nodess.keys():
+                    if source_id in self.nodes_int.keys() and target_id in self.nodes_int.keys():
                         self.G.add_edge(source_id, target_id, type=(edge_type[0], edge_type[2]))
 
         # # Add Legend Nodes
@@ -536,16 +546,24 @@ class HeteroGraphExplainer():
             }
         }
         """)
-        
+                    
         # Assegna i colori, le dimensioni e l'opacità ai nodi in Pyvis
         for i, node in enumerate(net.nodes):
             node['color'] = node_colors[node['type']]
-            if 'size' in self.G.nodes[node['id']] and node['id'] in self.nodess.keys():
-                node['size'] = self.G.nodes[node['id']]['size']
-                if self.algorithm == "GNNExplainer":
-                    node['opacity'] = self.nodess[node['id']] * 20
-                else:
-                    node['opacity'] = self.nodess[node['id']] * 20
+            if human_readable:
+                if 'size' in self.G.nodes[node['id']] and node['id'] in self.nodes_expl.keys():
+                    node['size'] = self.G.nodes[node['id']]['size']
+                    if self.algorithm == "GNNExplainer":
+                        node['opacity'] = self.nodes_expl[node['id']] * 20
+                    else:
+                        node['opacity'] = self.nodes_expl[node['id']] * 20
+            else:
+                if 'size' in self.G.nodes[node['id']] and node['id'] in self.nodes_int.keys():
+                    node['size'] = self.G.nodes[node['id']]['size']
+                    if self.algorithm == "GNNExplainer":
+                        node['opacity'] = self.nodes_int[node['id']] * 20
+                    else:
+                        node['opacity'] = self.nodes_int[node['id']] * 20
 
         # Assegna i colori agli archi in Pyvis
         for edge in net.edges:
@@ -722,7 +740,7 @@ class HeteroGraphExplainer():
                     edge_mask = self.explanation[edge_type]['edge_mask'][i]
 
                     if edge_mask > 0:
-                        if source_id in self.nodess.keys() and target_id in self.nodess.keys():
+                        if source_id in self.nodes_int.keys() and target_id in self.nodes_int.keys():
                             source, src_id = str(source_id).split('_')
                             target, tgt_id = str(target_id).split('_')
 
@@ -763,10 +781,10 @@ class HeteroGraphExplainer():
                                         medications.append(source_id)
 
 
-            symptoms = sorted(set(symptoms), key=lambda x: self.nodess[x], reverse=True)
-            procedures = sorted(set(procedures), key=lambda x: self.nodess[x], reverse=True)
-            diagnosis = sorted(set(diagnosis), key=lambda x: self.nodess[x], reverse=True)
-            medications = sorted(set(medications), key=lambda x: self.nodess[x], reverse=True)
+            symptoms = sorted(set(symptoms), key=lambda x: self.nodes_int[x], reverse=True)
+            procedures = sorted(set(procedures), key=lambda x: self.nodes_int[x], reverse=True)
+            diagnosis = sorted(set(diagnosis), key=lambda x: self.nodes_int[x], reverse=True)
+            medications = sorted(set(medications), key=lambda x: self.nodes_int[x], reverse=True)
 
             prompt_recruiter_doctors += f"\nTHE FOLLOWING MEDICAL SCENARIO of the patient in the visit {visit_id}, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
             prompt_internist_doctor += f"\n\nTHE FOLLOWING MEDICAL SCENARIO of the patient in the visit {visit_id}, in which the importance values of each condition are highlighted, is obtained from the explainability phase of the recommendation system, which aims to provide the conditions that the system has deemed important for recommendation purposes. In particular, the scenario includes:\n\n"
@@ -785,7 +803,7 @@ class HeteroGraphExplainer():
                     except Exception as e:
                         symptom_icd = "Unknown symptom"
 
-                    medical_scenario += "- " + symptom_icd + " - Importance level: " + str(round(self.nodess[symptom], 4)) + "\n"
+                    medical_scenario += "- " + symptom_icd + " - Importance level: " + str(round(self.nodes_int[symptom], 4)) + "\n"
 
 
             # List of procedures performed on the patient
@@ -802,7 +820,7 @@ class HeteroGraphExplainer():
                     except Exception as e:
                         procedure_icd = "Unknown procedure"
                     
-                    medical_scenario += "- " + procedure_icd + " - Importance level: " + str(round(self.nodess[procedure], 4)) + "\n"
+                    medical_scenario += "- " + procedure_icd + " - Importance level: " + str(round(self.nodes_int[procedure], 4)) + "\n"
 
 
             # List of patient's diagnoses
@@ -819,7 +837,7 @@ class HeteroGraphExplainer():
                     except Exception as e:
                         diagnosis_icd = "Unknown diagnosis"
 
-                    medical_scenario += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodess[diagnosis], 4)) + "\n"
+                    medical_scenario += "- " + diagnosis_icd + " - Importance level: " + str(round(self.nodes_int[diagnosis], 4)) + "\n"
 
             # List of medications administered to the patient
             medical_scenario += f"\n**Medications** already administered to the patient found important from the system (ordered by level of importance):\n\n"
@@ -835,7 +853,7 @@ class HeteroGraphExplainer():
                     except Exception as e:
                         medication_atc = "Unknown medication"
                         
-                    medical_scenario += "- " + medication_atc + " - Importance level: " + str(round(self.nodess[medication], 4)) + "\n"
+                    medical_scenario += "- " + medication_atc + " - Importance level: " + str(round(self.nodes_int[medication], 4)) + "\n"
 
             with open(f'{self.root}medical_scenario.txt', 'w') as file:
                 file.write(medical_scenario)
