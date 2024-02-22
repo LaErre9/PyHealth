@@ -126,6 +126,7 @@ class Trainer:
         monitor: Optional[str] = None,
         monitor_criterion: str = "max",
         load_best_model_at_last: bool = True,
+        tuning: bool = False,
     ):
         """Trains the model.
 
@@ -183,7 +184,12 @@ class Trainer:
 
         train_losses = []
         val_losses = []
-        prauc_losses = []
+        accuracy = []
+        prauc = []
+        f1 = []
+        jaccard = []
+        precision = []
+        recall = []
 
         # epoch training loop
         for epoch in range(epochs):
@@ -234,8 +240,15 @@ class Trainer:
                 logger.info(f"--- Eval epoch-{epoch}, step-{global_step} ---")
                 for key in scores.keys():
                     logger.info("{}: {:.4f}".format(key, scores[key]))
-                prauc_losses.append(scores['pr_auc_samples'])
+
+                accuracy.append(scores['accuracy'])
+                prauc.append(scores['pr_auc_samples'])
+                f1.append(scores['f1_samples'])
+                jaccard.append(scores['jaccard_samples'])
+                precision.append(scores['precision_samples'])
+                recall.append(scores['recall_samples'])
                 val_losses.append(scores["loss"])
+
                 # save best model
                 if monitor is not None:
                     score = scores[monitor]
@@ -249,6 +262,37 @@ class Trainer:
                             self.save_ckpt(os.path.join(self.exp_path, "best.ckpt"))
 
 
+        if tuning:
+            # save accuracy to a text file
+            with open(f"{model_name}_accuracy.txt", "w") as file:
+                for val in accuracy:
+                    file.write(f"{val}\n")
+
+            # save prauc to a text file
+            with open(f"{model_name}_prauc.txt", "w") as file:
+                for val in prauc:
+                    file.write(f"{val}\n")
+
+            # save f1 to a text file
+            with open(f"{model_name}_f1.txt", "w") as file:
+                for val in f1:
+                    file.write(f"{val}\n")
+
+            # save jaccard to a text file
+            with open(f"{model_name}_jaccard.txt", "w") as file:
+                for val in jaccard:
+                    file.write(f"{val}\n")
+
+            # save precision_losses to a text file
+            with open(f"{model_name}_precision.txt", "w") as file:
+                for val in precision:
+                    file.write(f"{val}\n")
+
+            # save recall_losses to a text file
+            with open(f"{model_name}_recall.txt", "w") as file:
+                for val in recall:
+                    file.write(f"{val}\n")
+
 
         # load best model
         if load_best_model_at_last and self.exp_path is not None and os.path.isfile(
@@ -260,7 +304,7 @@ class Trainer:
         epochs_range = range(1, epochs + 1)
         plt.plot(epochs_range, train_losses, label='Training Loss', marker='o')
         plt.plot(epochs_range, val_losses, label='Validation Loss', marker='o')
-        plt.plot(epochs_range, prauc_losses, label='PRAUC', marker='*')
+        plt.plot(epochs_range, prauc, label='PRAUC', marker='*')
 
         plt.xlabel('Epoch')
         plt.ylabel('Loss/PRAUC')
